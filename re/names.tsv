@@ -1,0 +1,55 @@
+# address	name	comment
+# Names identified while reverse engineering PeggleNights_inner.exe (the real game embedded in the PopCap launcher stub).
+# Applied to the Ghidra project by scripts/reexport.ps1. Calling-convention notes: many internal functions were built with
+# LTCG and take `this` in EAX or EBX instead of ECX -- noted per function. Virtual methods are normal __thiscall.
+
+# ---- Random number generator (single global Mersenne Twister, seeded once at startup with 4357) ----
+00566bb0	Sexy::MTRand_StaticInit	Static initializer: seeds the global MT with 0x1105 (4357). Only seeding site in the game.
+00566be0	Sexy::MTRand_SRand	MT19937 init_genrand on the global state (seed in EAX)
+00566c50	Sexy::MTRand_Next	MT19937 genrand_int32 on the global state; returns in EAX
+0056b510	Sexy::Rand	5-byte JMP stub every game caller uses (-> 0x566c40 -> MTRand_Next). Mod hook point.
+00704268	Sexy::gMTRand_state	624-dword MT19937 state of the global RNG
+00704c28	Sexy::gMTRand_index	MT19937 index (mti)
+
+# ---- Widget framework ----
+004e92a0	Sexy::WidgetContainer::Update	Base Update: mUpdateCnt(+0x28)++
+004e92b0	Sexy::WidgetContainer::UpdateAll	Calls Update (vtable +0x58) once per WidgetManager update count
+004e8f30	Sexy::WidgetContainer::MarkDirty	vtable slot 17 (+0x44)
+
+# ---- Board (vtable for Widget @0x6864a4; second vptr @+0x88; Board_data starts at +0x8C; sizeof 0x988) ----
+00403fb0	Sexy::Board::Board	Creates AIMgr (+0x700), LogicMgr (+0x720), Gun (+0xD4)
+0040e460	Sexy::Board::Update	vtable slot 22 (+0x58). Fixed-step game tick; increments tick counter at +0x8D4
+0040c530	Sexy::Board::Draw	vtable slot 26
+0040d250	Sexy::Board::DrawOverlay	vtable slot 44
+00406ff0	Sexy::Board::GotFocus	vtable slot 45
+00407000	Sexy::Board::LostFocus	vtable slot 46
+0040b240	Sexy::Board::KeyChar	vtable slot 47
+0040b310	Sexy::Board::KeyDown	vtable slot 48
+0040b390	Sexy::Board::KeyUp	vtable slot 49 (Enter key acts as a click)
+0040b1d0	Sexy::Board::MouseEnter	vtable slot 50
+0040b1e0	Sexy::Board::MouseLeave	vtable slot 51
+0040ae60	Sexy::Board::MouseMove	vtable slot 52 -> LogicMgr::MouseMove; ignored while AIMgr+0x4D set
+0040aec0	Sexy::Board::MouseDown	vtable slot 54 (x, y, clickCount) -> LogicMgr::MouseDown
+0040b070	Sexy::Board::MouseUp	vtable slot 56 (x, y, lastDownButton) -> LogicMgr::MouseUp
+0040ae90	Sexy::Board::MouseDrag	vtable slot 58 -> LogicMgr::MouseDrag
+0040b1f0	Sexy::Board::MouseWheel	vtable slot 59 -> LogicMgr::MouseWheel
+00407320	Sexy::Board::SetupPlayers	this=EBX. Per-level player/character setup; assigns computer opponent in Duel (mode 4)
+
+# ---- LogicMgr (Board+0x720). Fields: +0x04 state, +0x184 Board*, +0x1A8 two-player flag, +0x1AC current player,
+#      +0x208[i] balls left per player, +0x2D8[i] player-is-computer flags ----
+00466c30	Sexy::LogicMgr::LogicMgr
+00472190	Sexy::LogicMgr::MouseMove	this=EAX. Aims the gun unless current player is computer-controlled
+004721d0	Sexy::LogicMgr::MouseDrag	this=EAX
+00472240	Sexy::LogicMgr::MouseDown	this=EBX. Fires / handles clicks depending on state (+0x04)
+00472810	Sexy::LogicMgr::MouseUp
+004728f0	Sexy::LogicMgr::MouseWheel
+0046b6f0	Sexy::LogicMgr::NextTurn	this=EAX. Two-player: current = 1 - current, shows turn banner, resets shot state
+0046ae20	Sexy::LogicMgr::ShowTurnBanner	Builds the "<name>'s Turn" text
+00469890	Sexy::LogicMgr::SetupTurnOrder	Picks the first player with Rand()&1 (anti-streak via globals 0x6C8068/0x7051C0)
+
+# ---- App (ThunderballApp). Fields: +0x7F4 game mode (1..6, 4 = Duel), +0x864 Board* ----
+004c1b00	Sexy::MainMenu::ButtonDepress	Sets app game mode from the main-menu button pressed
+0042e420	Sexy::ThunderballApp::NewBoard_Mode2	Sets mode 2 and creates the Board
+0042e530	Sexy::ThunderballApp::NewBoard_Mode5	Sets mode 5 and creates the Board
+0042e660	Sexy::ThunderballApp::NewBoard_FromLevel	Creates the Board for the selected level (several modes)
+0042e1d0	Sexy::ThunderballApp::NewBoard_Other	Also creates a Board

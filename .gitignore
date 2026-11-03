@@ -1,0 +1,26 @@
+# The repository's root is a Peggle Nights game folder. Only the mod, its tools and the reverse-engineering notes are
+# tracked; the game's files, extracted assets, decompiled code, Ghidra projects and save backups stay out.
+/*
+!/.gitignore
+!/.gitattributes
+!/README.md
+!/LICENSE
+!/mod/
+!/re/
+
+# Build output, the player zip, test screenshots, the test copy of the game, the test harness's process list, and
+# the local helper that starts the second test copy (kept out of the repository)
+/mod/build/
+/mod/dist/
+/mod/shots/
+/mod/test/
+/mod/tools/duo.json
+/mod/tools/run2.py
+__pycache__/
+
+# Of the reverse-engineering workspace, only the notes, the names and the scripts
+/re/*
+!/re/README.md
+!/re/NOTES.md
+!/re/names.tsv
+!/re/scripts/
