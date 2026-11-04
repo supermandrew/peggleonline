@@ -85,7 +85,7 @@ void* g_listener_vtable[7] = {reinterpret_cast<void*>(LPress2), reinterpret_cast
                               reinterpret_cast<void*>(LMove)};
 ChoiceListener g_listeners[kLastId - kFirstId + 1];
 
-void* MakeButton(int id, void* listener, const char* label)
+GAME_CALL void* MakeButton(int id, void* listener, const char* label)
 {
     game::GameString text(label);
     void* button;

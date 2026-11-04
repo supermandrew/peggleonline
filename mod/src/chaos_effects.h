@@ -12,6 +12,8 @@ namespace chaos {
 
 void InstallEffects();
 void UpdateEffects();  // once per frame, outside the simulation: pictures made for a board that went are deleted
+void BoardDrawBegins(void* board);  // around a board's drawing: what's drawn upside down set up for it
+void BoardDrawEnds();
 
 bool EffectPossible(void* board, Effect e);  // e.g. Purple Party needs three blue pegs
 void BeginEffect(void* board, Effect e);
@@ -21,7 +23,12 @@ uint32_t EffectHash();
 std::string EffectDebug();  // testing: what the hooks did
 bool DebugBombAt(float x, float y);
 bool DebugDropIn();
+void DebugPlaceBall(float x, float y, float vx, float vy);  // testing: the next ball to move (screen)
 void DebugSpooky();  // testing: the next shot is a Spooky Ball that comes back once
+// Testing: the player in turn (or the one given) has a master's power (the game's number: 2 Flippers, 4 Pyramid,
+// 6 Spooky Ball, 12 Fireball, 14 Chain Lightning...) for this many turns; for the player in turn its objects are on
+// or off now, as when a turn begins.
+bool DebugPower(void* board, int power, int turns, int player = -1);
 
 // Red Peg Mode: the red peg (a blue peg drawn red, never made purple or shuffled), chosen inside the ticks.
 void* ChooseRedPeg(void* board);  // a random unhit blue peg (round or a brick, still or moving), now the red one

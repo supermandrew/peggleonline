@@ -16,6 +16,12 @@ inline T& At(const void* base, int off)
     return *reinterpret_cast<T*>(reinterpret_cast<uintptr_t>(base) + off);
 }
 
+// A function whose inline assembly calls the game: never inlined. The compiler takes an __asm block to keep the xmm
+// registers, so inlined into its caller it may hold floats in them across the game's code, which can change them (its
+// drawing goes through Direct3D and the video driver, its sounds through BASS). A real call makes the compiler treat
+// them as lost, as the calling convention says. Assembly inside a bigger function belongs in one of these.
+#define GAME_CALL __declspec(noinline)
+
 // ---- Globals ----
 constexpr uintptr_t kAppPtr = 0x6CBE10;  // ThunderballApp* (SexyAppBase constructor stores `this`)
 inline void* App() { return *reinterpret_cast<void**>(kAppPtr); }

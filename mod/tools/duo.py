@@ -34,11 +34,19 @@ windows have focus and wherever the real mouse is.
   python duo.py localfull        start, local
   python duo.py chaos            copy A: Chaos Mode in a local duel: the CHAOS MODE box on the selection (ticks,
                                  remembered), the rounds (two shots without an effect, then a new announced effect
-                                 every round), then each of the 16 effects checked by what it does, and the Spooky
-                                 Ball coming back (at the bottom when upside down); then a shot under each effect
-                                 and its Instant Replay (the effect in place, the balls just where they went), the
-                                 replay panel's Save keeping the effects in the file
+                                 every round), a Zen Ball (Master Hu's power) being a shot of its round, then each of
+                                 the 16 effects checked by what it does, and the Spooky Ball coming back (at the
+                                 bottom when upside down); masters' powers at the bucket (chaospowers); then a shot
+                                 under each effect and its Instant Replay (the effect in place, the balls just where
+                                 they went), the replay panel's Save keeping the effects in the file
   python duo.py chaosreplay [N...]  just the Instant Replays (of effects N...)
+  python duo.py chaoszen         just the rounds and the Zen Ball
+  python duo.py chaospowers      just the masters' powers at the bucket with its effects: Claude's flippers upside
+                                 down (at the top, swinging down, batting the ball down), Double Bucket keeping half
+                                 the track over the turns, the second bucket's rim, catch and lid (a fireball knocks
+                                 it off), Chain Lightning's arc to the nearer bucket and upside down to the rod under
+                                 the bucket, the pyramid's sides and a catch upside down (chaospowersfull: start
+                                 first)
   python duo.py chaosonline      A hosts, B joins: the joiner's box shows the host's; online Chaos Mode duels (Replay
                                  Level) through all 16 effects, the same on both, pictures identical, the bomb set off
   python duo.py chaosfull | chaosonlinefull   start first
@@ -50,7 +58,9 @@ windows have focus and wherever the real mouse is.
                                  through, again in its shot's Instant Replay; Silhouette's gray pegs, Blind Shot,
                                  Lights Out), no red peg after it's hit, the replay of the hit not giving it again;
                                  then with Chaos Mode too: both effects at once, announced together, never the same
-                                 one
+                                 one; Mirage's fakes on Eiffel Power; a red brick turning round a flower (The
+                                 Guardians) drawn red in every frame
+  python duo.py redturning       just the turning red brick
   python duo.py redpegonline     A hosts, B joins: the joiner's RED PEG MODE box shows the host's; an online duel with
                                  the red peg hit and Mirage then Silhouette, the same on both, pictures identical;
                                  SAVE in Instant Replay's place (B's shot saved, noted in B's chat only, one saved
@@ -426,7 +436,6 @@ def start():
     if 'pid' not in b or b.get('hwnd') == '?':
         raise StepFailed(f'copy B did not start: {out.strip()}')
     st = {'A': {'pid': int(a['pid']), 'hwnd': int(a['hwnd'])}, 'B': {'pid': int(b['pid']), 'hwnd': int(b['hwnd'])}}
-    LEVEL_PAGE.clear()
     with open(STATE, 'w') as f:
         json.dump(st, f)
     gamectl.main(['place', str(st['A']['hwnd']), '850', '300'])
@@ -473,6 +482,7 @@ def connect(level=(140, 170)):
         wait_log(k, 'online: opponent is', since, 10)
     ok('connected (A hosts, B joined 127.0.0.1)')
     time.sleep(1.5)  # level screen slides in on A
+    level_page('A', 1)
     since = mark()
     click('A', *level)
     for k in 'AB':
@@ -565,6 +575,7 @@ def localfirst():
         click('A', 440, 297)                                 # New Game
         wait(lambda: not dialog_open('A', DLG_CONTINUE_GAME), 5, 'copy A: New Game did not close "Continue Game?"')
     time.sleep(2.5)
+    level_page('A', 1)
     click('A', 140, 170)                                     # first level
     wait(lambda: dialog_open('A', DLG_SELECTION), 10, 'copy A: the local duel never reached the master selection')
     time.sleep(1.5)                                          # slides in
@@ -1522,9 +1533,11 @@ def chaos_force(k, e):
 
 
 def chaos_shoot(k, x, y):
-    """The player in turn on copy k shoots at (x, y) with the mouse. (A click just as a turn begins can go unheard:
-    it clicks again.)"""
+    """The player in turn on copy k shoots at (x, y) with the mouse, without a Zen Ball: with Master Hu's power the
+    game would choose the shot, and its Instant Replay may be a physics step off (re/NOTES.md). (A click just as a turn
+    begins can go unheard: it clicks again.) Local duels only (`chaos zen` changes one computer)."""
     wait(lambda: board(k)['state'] == '1', 90, f'copy {k}: no one gets to shoot')
+    send(k, 'chaos zen 0')
     balls = board(k)['balls']
     for attempt in range(3):
         send(k, f'move {x} {y}')
@@ -1560,6 +1573,7 @@ def chaos_local_start(k='A', check_box=True):
         click(k, 440, 297)                                   # New Game
         wait(lambda: not dialog_open(k, DLG_CONTINUE_GAME), 5, 'New Game did not close "Continue Game?"')
     time.sleep(2.5)
+    level_page(k, 1)
     click(k, 140, 170)                                       # first level
     wait(lambda: dialog_open(k, DLG_SELECTION), 10, 'the local duel never reached the master selection')
     time.sleep(1.5)                                          # slides in
@@ -1614,6 +1628,47 @@ def chaos_rounds(k='A'):
     if s['round'] != '2' or s['effect'] in ('-1', str(first)):
         raise StepFailed(f'round 2 should have brought a new effect: {s}')
     ok(f'rounds: two shots without an effect, then {CHAOS_EFFECTS[first]}, then {CHAOS_EFFECTS[int(s["effect"])]}')
+
+
+def chaos_zen(k='A'):
+    """Master Hu's Zen Ball (given to the player in turn, as his power would): the game chooses the shot, in a state
+    of its own, before the ball is in play. That's the player's shot of the round, which the round's Double Shot
+    splits in two, and after the other player's shot the next round begins. (Run where a round begins.)"""
+    chaos_force(k, 8)                                        # Double Shot!
+    s = chaos_state(k)
+    if s['shots'] != '0':
+        raise StepFailed(f'a round should just have begun: {s}')
+    rnd, zen, twins = s['round'], int(s['zen']), int(chaos_fx(k)['twins'])
+    send(k, 'chaos zen')
+    wait(lambda: chaos_state(k)['zenleft'] == '1', 3, 'chaos zen gave the player no Zen Ball')
+    balls = board(k)['balls']
+    for attempt in range(3):                                 # (as chaos_shoot, but the Zen Ball takes its time)
+        send(k, 'move 400 420')
+        time.sleep(0.3)
+        click(k, 400, 420)
+        try:
+            wait(lambda: board(k)['state'] != '1', 2.5, '')
+            break
+        except StepFailed:
+            pass
+    else:
+        raise StepFailed('the Zen Ball shot did not go')
+    wait(lambda: board(k)['balls'] != balls, 15, 'the Zen Ball never left the cannon')
+    chaos_next_turn(k)
+    s = chaos_state(k)
+    if int(s['zen']) <= zen:
+        raise StepFailed(f'the shot never went through the Zen Ball choosing it: {s}')
+    if s['shots'] == '0' or s['round'] != rnd or s['effect'] != '8':
+        raise StepFailed(f'the Zen Ball should be a shot of the round, with Double Shot still on: {s}')
+    if int(chaos_fx(k)['twins']) <= twins:
+        raise StepFailed("Double Shot did not split the Zen Ball's shot in two")
+    chaos_shoot(k, 400, 420)
+    chaos_next_turn(k)
+    s = chaos_state(k)
+    if s['round'] != str(int(rnd) + 1) or s['effect'] == '8':
+        raise StepFailed(f"after the other player's shot the next round should have begun: {s}")
+    ok(f'a Zen Ball is a shot of the round (Double Shot split it), then round {s["round"]}: '
+       f'{CHAOS_EFFECTS[int(s["effect"])]}')
 
 
 def chaos_effects(k='A'):
@@ -1782,6 +1837,179 @@ def chaos_effects(k='A'):
     ok('every effect did its part (local duel)')
 
 
+def chaos_powers(k='A'):
+    """Masters' powers at the bucket with the bucket's effects (`chaos power` gives the player in turn a power as a
+    turn would, `chaos ballat` puts the ball in play somewhere): Claude's flippers upside down (at the top, mirrored,
+    swinging down, batting a ball down) and back; Double Bucket's halves keeping half the track over the turns (half
+    the flippers' narrower one too); the second bucket bouncing a ball off its rim and catching one off its middle;
+    its lid knocked off by a fireball; Chain Lightning's arc to the nearer bucket, and upside down to the rod under
+    the bucket; the pyramid's sides upside down; a catch in the bucket upside down."""
+    send(k, 'chaos hold')
+
+    def fx():
+        return chaos_fx(k)
+
+    def pair(key, f=None):
+        return tuple(float(v) for v in (f or fx())[key].split(','))
+
+    def place(x, y, vx, vy):
+        send(k, f'chaos ballat {x:.0f} {y:.0f} {vx} {vy}')
+
+    def path(n, every=0.04):  # where the ball in play goes (screen), until it's gone
+        out = []
+        for _ in range(n):
+            time.sleep(every)
+            b = pair('ball')
+            if b == (-1, -1):
+                break
+            out.append(b)
+        return out
+
+    def track_kept(want, what):
+        wait(lambda: fx()['track'] == str(want), 6, f'Double Bucket: the track should stay {want} wide {what}, '
+             f"not {fx()['track']}")
+
+    # Claude's flippers: at the bottom, then mirrored to the top upside down.
+    chaos_next_turn(k)
+    send(k, 'chaos power 2 3')
+    f = fx()
+    pivots = pair('flippers', f)
+    if f['flipalive'] != '2' or not (520 < pivots[1] < 540 and 520 < pivots[3] < 540):
+        raise StepFailed(f"Flippers: both claws should be at the bottom: {f['flippers']}, alive {f['flipalive']}")
+    turns = f['flipturn']
+    chaos_force(k, 13)
+    time.sleep(3.2)
+    f = fx()
+    up = pair('flippers', f)
+    want = (pivots[0], 666 - pivots[1], pivots[2], 666 - pivots[3])  # (mirrored about 586 / 2 + 40, as the bucket)
+    if any(abs(a - b) > 1 for a, b in zip(up, want)) or f['flipturn'] == turns:
+        raise StepFailed(f"Flippers upside down: the pivots should be at {want}, turning the other way: {f}")
+    frame(k, 'powers_flippers_upside_down')
+    rest = pair('flipreach', f)
+    chaos_shoot(k, 400, 250)
+    send(k, 'down 400 300')
+    time.sleep(0.35)
+    held = pair('flipreach')
+    send(k, 'up 400 300')
+    if held[1] < rest[1] + 25:
+        raise StepFailed(f'Flippers upside down: flipping should swing them down (reach {rest} -> {held})')
+    time.sleep(0.4)
+    place(120, 156, 0, -0.5)                                 # under the left claw (resting at y ~150), flipped
+    time.sleep(0.1)
+    send(k, 'down 400 300')
+    p = path(8)
+    send(k, 'up 400 300')
+    if not p or max(y for _, y in p) < 185:                  # (pressed up against it, it would stay over ~165)
+        raise StepFailed(f'Flippers upside down: the claw should bat the ball down: {p}')
+    ok('Flippers upside down: at the top, mirrored, swinging and batting the ball down')
+    chaos_next_turn(k)
+    chaos_force(k, 'none')
+    time.sleep(0.5)
+    back = pair('flippers')
+    if any(abs(a - b) > 1 for a, b in zip(back, pivots)):
+        raise StepFailed(f'Flippers: back at the bottom after Upside Down: {back}, not {pivots}')
+    for player in (0, 1):                                    # (the one given them still has some)
+        send(k, f'chaos power 2 0 {player}')
+
+    # Double Bucket: half the track, kept so over the turns (the game sets a full one each turn).
+    chaos_force(k, 2)
+    track_kept(130, 'as it begins')
+    send(k, 'chaos power 2 3')
+    track_kept(65, 'with the flippers (half their 130)')
+    send(k, 'chaos power 2 0')
+    track_kept(130, 'with the flippers gone')
+    frame(k, 'powers_double_bucket')
+    f = fx()
+    catches, bounces = int(f['catches']), int(f['twinbounces'])
+    chaos_shoot(k, 400, 300)
+    hx = pair('hole')[0]
+    place(hx + 260 + 75 + 66, 560, 0, 3)                     # on the second bucket's right rim
+    p = path(10)
+    if int(fx()['twinbounces']) <= bounces:
+        raise StepFailed(f'Double Bucket: a ball on the second bucket\'s rim should bounce off it: {p}')
+    hx = pair('hole')[0]
+    place(hx + 260 + 75 + 40, 584, 0, 1)                     # in, off its middle
+    wait(lambda: int(fx()['catches']) > catches, 5, 'Double Bucket: the second bucket did not catch a ball off its '
+         'middle')
+    chaos_next_turn(k)
+    track_kept(130, 'after the turn passed')
+    send(k, 'chaos power 12 1')                              # a fireball, and the bucket's lid on
+    f = fx()
+    if f['lid'] != '1' or f['fireball'] != '1':
+        raise StepFailed(f"Fireball: the lid should be on and the ball a fireball: lid {f['lid']}, {f['fireball']}")
+    frame(k, 'powers_double_bucket_lid')
+    knocks = int(f['lidknocks'])
+    chaos_shoot(k, 400, 300)
+    hx = pair('hole')[0]
+    place(hx + 260 + 75, 545, 0, 2)                          # on the second bucket's lid
+    wait(lambda: int(fx()['lidknocks']) > knocks and fx()['lid'] == '0', 5,
+         'Double Bucket: a fireball on the second bucket\'s lid should knock it off')
+    ok('Double Bucket: half the track over the turns, the second bucket\'s rim, catch and lid')
+
+    # Chain Lightning: the arc to the nearer bucket.
+    for attempt in range(3):
+        chaos_next_turn(k)
+        f = fx()
+        zaps = int(f['zaps'])
+        send(k, 'chaos power 14 1')
+        wait(lambda: fx()['charged'] == '1', 3, 'Chain Lightning: the ball was not charged')
+        if attempt == 0:
+            time.sleep(1.5)                                  # (the rods rise)
+            frame(k, 'powers_lightning_double_bucket')
+        chaos_shoot(k, 690, 330)                             # (the right: the second bucket's side)
+        wait(lambda: int(fx()['zaps']) > zaps, 10, 'Chain Lightning: no arc')
+        f = fx()
+        peg, rod = pair('zappeg', f)[0], float(f['zaprod'])
+        nearer = abs(peg - rod - 260) < abs(peg - rod)
+        if (f['zaptwin'] == '1') != nearer:
+            raise StepFailed(f"Chain Lightning: the arc from a peg at x {peg:.0f} should go to the "
+                             f"{'second' if nearer else 'first'} bucket (rod at {rod:.0f}): {f['zaptwin']}")
+        if nearer:
+            break
+    else:
+        raise StepFailed('Chain Lightning: three arcs and none from nearer the second bucket')
+
+    # Upside down: the arc to the rod under the bucket; the pyramid's sides; a catch.
+    chaos_next_turn(k)
+    chaos_force(k, 13)
+    time.sleep(3.2)
+    zaps = int(fx()['zaps'])
+    send(k, 'chaos power 14 1')
+    wait(lambda: fx()['charged'] == '1', 3, 'Chain Lightning upside down: the ball was not charged')
+    time.sleep(1.5)
+    frame(k, 'powers_lightning_upside_down')
+    chaos_shoot(k, *pair('orange'))                          # (at a peg: straight up from the cannon is a gap)
+    wait(lambda: int(fx()['zaps']) > zaps, 10, 'Chain Lightning upside down: no arc')
+    at = pair('zapat')
+    if not 100 < at[1] < 125:                                # (the rod 44 under the bucket's middle at 70)
+        raise StepFailed(f'Chain Lightning upside down: the arc should end at the rod under the bucket, not {at}')
+    ok('Chain Lightning: the arc to the nearer bucket; upside down to the rod under the bucket')
+    chaos_next_turn(k)
+    send(k, 'chaos power 4 3')
+    time.sleep(0.5)
+    frame(k, 'powers_pyramid_upside_down')
+    catches = int(fx()['upcatches'])
+    chaos_shoot(k, 690, 330)
+    wait(lambda: pair('hole')[0] > 220, 8, 'the bucket never came far enough right')
+    hx = pair('hole')[0]
+    place(hx - 130 + 75, 125, 0, -2)                         # under the pyramid's left side, rising
+    p = path(8)
+    top = min((y for _, y in p), default=0)                  # (its underside slopes, 84..93 there; through it the
+    if top < 80 or not any(y > top + 8 for _, y in p[p.index(min(p, key=lambda q: q[1])):]):  # ball would go on up)
+        raise StepFailed(f'Pyramid upside down: a rising ball should bounce off the underside of its side: {p}')
+    hx = pair('hole')[0]
+    place(hx + 75, 76, 0, -1)                                # in the bucket
+    wait(lambda: int(fx()['upcatches']) > catches, 5, 'Upside Down: the bucket did not catch a ball')
+    time.sleep(0.15)
+    frame(k, 'powers_catch_upside_down')
+    for player in (0, 1):
+        send(k, f'chaos power 4 0 {player}')
+    chaos_next_turn(k)
+    chaos_force(k, 'none')
+    send(k, 'chaos hold off')
+    ok('the pyramid\'s sides and a catch upside down')
+
+
 def chaos_leave(k='A'):
     leave_board(k)
     time.sleep(2)
@@ -1795,10 +2023,15 @@ def chaoslocal():
     k = 'A'
     chaos_local_start(k)
     chaos_rounds(k)
+    chaos_zen(k)
     leave_board(k)                                           # a new duel: all of its balls for the effects
     time.sleep(3)
     chaos_local_start(k, check_box=False)
     chaos_effects(k)
+    chaos_leave(k)
+    time.sleep(3)
+    chaos_local_start(k, check_box=False)                    # masters' powers at the bucket
+    chaos_powers(k)
     chaos_leave(k)
     time.sleep(3)
     chaos_local_start(k, check_box=False)                    # and again for their Instant Replays
@@ -2187,17 +2420,44 @@ def fx_point(f, key):
     return tuple(int(float(v)) for v in f[key].split(','))
 
 
-LEVEL_PAGE = {}  # the page of each copy's level screen (it stays on the last stage shown), since it started
 EIFFEL_POWER = (6, 660, 170)  # (stage, x, y): blue bricks and blue pegs going round
+THE_GUARDIANS = (13, 400, 170)  # Spring Fever: Day 1, flowers with rings of blue bricks that turn round them
+
+
+def shown_page(k):
+    """The stage page the local duel's level screen shows: the player's profile keeps the last one turned to (+0x38,
+    also between sessions), and the level screen opens on it."""
+    return int(send(k, 'peek profile 38')) + 1
 
 
 def level_page(k, page):
     """The local duel's level screen turned to a stage's page."""
-    now = LEVEL_PAGE.get(k, 1)
+    now = shown_page(k)
     for _ in range(abs(page - now)):
         click(k, 455 if page > now else 345, 563)            # next / previous stage
         time.sleep(1.2)
-    LEVEL_PAGE[k] = page
+    if shown_page(k) != page:
+        raise StepFailed(f'the level screen shows stage {shown_page(k)}, not {page}')
+
+
+def level_screen_home(k='A'):
+    """From the main menu: the local duel's level screen turned back to Stage One, then the main menu again. The
+    player's profile keeps the page between sessions, so a test that ends on another stage would leave it there for
+    the player."""
+    click(k, 680, 372)                                       # Duel
+    wait(lambda: dialog_open(k, DLG_MODE), 5, 'Duel did not open the Local/Online dialog')
+    time.sleep(0.8)
+    click(k, 215, 286)                                       # Local Play
+    time.sleep(1.5)
+    if dialog_open(k, DLG_CONTINUE_GAME):
+        time.sleep(0.8)
+        click(k, 440, 297)                                   # New Game
+        wait(lambda: not dialog_open(k, DLG_CONTINUE_GAME), 5, 'New Game did not close "Continue Game?"')
+    time.sleep(2.5)
+    level_page(k, 1)
+    click(k, *(button_center(k, 'Main Menu') or (32, 565)))  # the level screen's Main Menu
+    wait(lambda: button_center(k, 'Options'), 10, 'the level screen did not go back to the main menu')
+    time.sleep(1.0)
 
 
 def red_local_start(k='A', chaos=False, check_box=True, level=(1, 140, 170)):
@@ -2615,6 +2875,28 @@ def red_bricks_moving(k='A'):
     red_effect_ends(k, 16)
 
 
+def red_brick_turning(k='A'):
+    """The red peg a brick turning round a flower (The Guardians): drawn red in every frame, its picture staying where
+    it belongs in the brick. (Drawing its glow once lost that place, kept in xmm registers across the game's drawing,
+    which changes them when it turns a picture: most frames drew the brick somewhere off the board.)"""
+    red_local_start(k, check_box=False, level=THE_GUARDIANS)
+    since = mark()
+    send(k, 'chaos redat 404 244 brick')                     # the top of the middle flower's ring
+    wait_log(k, 'the red peg is moved', since, 5)
+    f = chaos_fx(k)
+    if f['redbrick'] != '1' or f['redmoving'] != '1':
+        raise StepFailed(f'the red peg should be a brick going round: {red_kind(f)}')
+    time.sleep(1.0)                                          # (its glow closes in on it)
+    pictures = {chaos_fx(k)['redpicture'] for _ in range(40)}
+    if len(pictures) != 1:
+        raise StepFailed(f"the red brick's picture moved about in it: {sorted(pictures)[:6]}")
+    counts = [red_drawn(k, f'red_turning{i}', 20)[2] for i in range(10)]
+    if min(counts) < 40:
+        raise StepFailed(f'the turning red brick is missing from frames (red pixels in each: {counts})')
+    ok(f'a red brick going round: its picture stays put ({pictures.pop()}) and 10 frames show it red '
+       f'({min(counts)}-{max(counts)} red pixels)')
+
+
 def redpeg_local():
     k = 'A'
     red_local_start(k)
@@ -2627,6 +2909,11 @@ def redpeg_local():
     time.sleep(3)
     red_bricks_moving(k)
     chaos_leave(k)
+    time.sleep(3)
+    red_brick_turning(k)
+    chaos_leave(k)
+    time.sleep(3)
+    level_screen_home(k)                                     # (Eiffel Power is on Stage Six, The Guardians on 13)
     ok('Red Peg Mode (local) passed')
 
 
@@ -2855,6 +3142,22 @@ def main(argv):
                 if path and os.path.exists(path):
                     os.remove(path)
             ok('Instant Replay with Chaos Mode passed')
+        elif cmd == 'chaoszen':
+            chaos_local_start('A', check_box=False) if ini_value('duel', 'chaos') == '1' else chaos_local_start('A')
+            chaos_rounds('A')
+            chaos_zen('A')
+            chaos_leave('A')
+        elif cmd in ('chaospowers', 'chaospowersfull'):
+            if cmd == 'chaospowersfull':
+                start()
+            chaos_local_start('A', check_box=False) if ini_value('duel', 'chaos') == '1' else chaos_local_start('A')
+            chaos_powers('A')
+            chaos_leave('A')
+        elif cmd == 'redturning':
+            red_brick_turning('A')
+            chaos_leave('A')
+            time.sleep(3)
+            level_screen_home('A')
         elif cmd == 'redpeg':
             redpeg_local()
         elif cmd == 'redpegfull':

@@ -81,7 +81,7 @@ void AddDialog(int id, void* dialog)
     VCall<Fn>(App(), kAppSlotAddDialog)(App(), id, dialog);
 }
 
-void ShowDialogAnimated(void* dialog, bool from_top)
+GAME_CALL void ShowDialogAnimated(void* dialog, bool from_top)
 {
     int top = from_top ? 1 : 0;
     __asm {
@@ -102,7 +102,7 @@ void CloseDialog(int id)
         reinterpret_cast<void(__fastcall*)(void*, int)>(kCloseDialogById)(App(), id);
 }
 
-void* NewEditDialog(int id, const char* header)
+GAME_CALL void* NewEditDialog(int id, const char* header)
 {
     void* mem = GameNew(kEditDialogSize);
     GameString h(header);
@@ -118,7 +118,7 @@ void* NewEditDialog(int id, const char* header)
     return dlg;
 }
 
-void ShowLevelScreenFromMainMenu(void* main_menu_listener)
+GAME_CALL void ShowLevelScreenFromMainMenu(void* main_menu_listener)
 {
     At<uint8_t>(main_menu_listener, kMainMenuListenerOffResume) = 0;
     void* app = At<void*>(main_menu_listener, kMainMenuListenerOffApp);

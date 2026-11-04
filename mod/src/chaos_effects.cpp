@@ -28,6 +28,7 @@ constexpr int kBoardOffPhysics = 0x708;      // PhysMgr*
 constexpr int kBoardOffLogic = 0x720;
 constexpr int kBoardOffObjects = 0x764;  // std::list head: everything on the board (walls, bucket, pegs, balls)
 constexpr int kBoardOffBalls = 0x770;    // std::list head: the balls in play
+constexpr int kBoardOffChallenge = 0x6F4, kChallengeOffCovered = 0xDD;  // a challenge whose bucket keeps its lid
 constexpr float kFieldW = 650, kFieldH = 560;  // the playfield, drawn at (75, 40)
 
 constexpr int kLogicOffState = 0x04, kLogicOffFever = 0x102;  // Extreme Fever has begun (the last orange is hit)
@@ -36,6 +37,8 @@ constexpr int kLogicOffAim = 0xEC;
 constexpr int kLogicOffReplaying = 0x101;  // an Instant Replay is playing
 constexpr int kLogicOffBoard = 0x184, kLogicOffPlayer = 0x1AC;  // the current player
 constexpr int kLogicOffSpookies = 0x290;  // int per player: how many more times a Spooky Ball comes back
+constexpr int kLogicOffPowerTurns = 0x260;  // int per power and player (+ 8 * power + 4 * player): turns it lasts
+constexpr int kLogicOffTrackGoal = 0x1B8;   // int: the width the bucket's track is easing to (0: it's there)
 constexpr int kStateBallInPlay = 2, kStateTurnPassing = 6;
 
 // Everything on the board is a PhysObj. The shot ball and round pegs are Balls, bricks are Bricks.
@@ -51,24 +54,41 @@ constexpr int kObjOffId = 0x5C;       // std::string from the level file ("wall"
 constexpr int kObjOffPegInfo = 0xD0;  // PegInfo*: set on pegs only
 constexpr int kObjSlotSetPos = 17, kObjSlotSetVelocity = 19;                           // (float, float)
 constexpr int kObjSlotDrawShadow = 24, kObjSlotDraw = 25, kObjSlotDrawOverlay = 26;  // (Graphics*)
+constexpr int kObjSlotSetActive = 33;  // (bool): on the board or off it, fading
+
+// Polys: a shape (the points about its position, unturned), turned about the position (a flipper about its pivot).
+constexpr uintptr_t kPolyVtable = 0x688B3C;
+constexpr int kPolyOffPoints = 0xE8;  // std::vector of (x, y): first, last
+constexpr int kPolyOffX = 0x114, kPolyOffY = 0x118;
+constexpr int kPolyOffAngle = 0x11C, kPolyOffSpin = 0x120, kPolyOffDrawAngle = 0x128;  // radians (a step)
+constexpr int kPolyOffPictureY = 0xBC;                       // its picture's centre from the position
+constexpr int kPolyOffTurned = 0x145, kPolyOffMoved = 0x146;  // its edges are to be worked out again
+constexpr int kPolyOffShown = 0x28, kPolyOffDrawnOnly = 0xB0;  // a bucket part drawn (or one that only collides)
+constexpr uintptr_t kReverseShape = 0x4A2C40;  // stdcall(poly): its points the other way round, its edges anew
 
 // Balls
 constexpr int kBallOffX = 0xEC, kBallOffY = 0xF0, kBallOffVX = 0xFC, kBallOffVY = 0x100;
 constexpr int kBallOffLastX = 0xF4, kBallOffLastY = 0xF8;  // where it was before this step's move
 constexpr int kBallOffRadius = 0x13C;
+constexpr int kBallOffKnockedLid = 0x145;   // a fireball knocked the bucket's lid off ("Hot Stuff!" if it falls in)
 constexpr int kBallOffSpooky = 0x164;       // Renfield's Spooky Ball: comes back when it falls out
 constexpr int kBallOffFireball = 0x165;     // passes through pegs
+constexpr int kBallOffCharged = 0x166;      // carries Chain Lightning (its first peg hit arcs to the bucket's rod)
 constexpr int kBallOffHitsBalls = 0x16D;    // bounces off other balls
 constexpr int kBallOffCompanion = 0x19C;    // (Multiball copies these two to its new ball)
 constexpr int kBallOffGhost = 0x1A0;
 constexpr int kBallSize = 0x1AC;
 constexpr float kBallRadius = 6.0f;
 
-// The bucket's movers: x = base + radius * cos(2 pi f), f from the tick plus an offset.
+// The bucket's movers: x = base + radius * cos(2 pi f), f from the tick plus an offset. A flipper's (type 9 or -9,
+// the sign the way it turns) keeps it at the base, turned by sign * (its swing) + the turn.
+constexpr int kMoverOffType = 0x10;
 constexpr int kMoverOffTicks = 0x14, kMoverOffRadius = 0x18;  // int, int
+constexpr int kMoverOffTurn = 0x44, kMoverOffAngle = 0x64;   // float: radians (the angle now)
 constexpr int kMoverOffX = 0x54, kMoverOffY = 0x58;          // float: where it is now
 constexpr int kMoverOffBaseX = 0x5C, kMoverOffBaseY = 0x60;  // float
-constexpr int kHoleOffX = 0xF4, kHoleOffY = 0xF8, kHoleOffW = 0x104, kHoleOffH = 0x108;  // float: the catch area
+constexpr int kHoleOffX = 0xF4, kHoleOffY = 0xF8;  // float: the catch area's centre
+constexpr int kHoleOffW = 0x104, kHoleOffH = 0x108;  // int: its size
 
 // The cannon (a Poly): pivot, angle (radians; direction (cos a, -sin a), 3 pi / 2 is straight down), loaded ball.
 constexpr int kGunOffX = 0x114, kGunOffY = 0x118, kGunOffBall = 0x1C0;
@@ -108,7 +128,14 @@ constexpr uintptr_t kNearPeg = 0x493700;       // ECX ball, EAX peg, stdcall(1.0
 constexpr uintptr_t kStartSlowMo = 0x471B80;   // EBX LogicMgr: 10% speed, zoom in, the slow-motion sound
 constexpr uintptr_t kSetSlowMo = 0x408710;     // EDI Board, AL on, ECX speed (1000 = normal)
 constexpr uintptr_t kSetGunAngle = 0x498C50;   // EAX gun, stdcall(float, bool immediate)
+constexpr uintptr_t kSwitchPower = 0x46AA40;   // stdcall(LogicMgr, power, bool on): a master's power's objects
+constexpr uintptr_t kChargeBall = 0x498E10;    // ESI gun: the loaded ball carries Chain Lightning (a turn begins)
+constexpr uintptr_t kFireBall = 0x498E50;      // EAX gun: the loaded ball is a fireball (a turn begins)
+constexpr uintptr_t kSwitchPyramid = 0x46A850;  // stdcall(LogicMgr, bool on): the pyramid on the bucket or not
+enum Power { kPowerFlippers = 2, kPowerPyramid = 4, kPowerFireball = 12, kPowerLightning = 14 };
 constexpr uintptr_t kGravityOp = 0x493B85;     // Ball::Update: fadd (05) / fsub (25) dword ptr [gravity]
+constexpr uintptr_t kAiRodOp = 0x4394F2;       // the computer's rod: the bucket's y fsub (25) / fadd (05) 44
+constexpr uintptr_t kAiFlipperLow = 0x473A60, kAiFlipperHigh = 0x473A6A;  // the computer flips for y 400..550 - 40
 // (the gravity itself, a float 0.05, is at 0x6C77CC)
 constexpr uintptr_t kCollisionCallback = 0x4547E8;  // immediate: what the physics calls after each bounce
 constexpr uintptr_t kRecordCollision = 0x4546D0;    // cdecl(ball, obj): the game's callback
@@ -116,6 +143,7 @@ constexpr uintptr_t kSpeedCapSq = 0x493C8E, kSpeedCap = 0x493CB2;  // operands: 
 constexpr uintptr_t kBallStep = 0x40DF81;      // each ball, after it moved (ESI ball, EDI board): 6-byte fld
 constexpr uintptr_t kHitProcessing = 0x40E104;  // call: the step's hits and catches
 constexpr uintptr_t kShotFired = 0x4770CE;     // call: a shot's bookkeeping, the ball at [ebp-0x14]
+constexpr uintptr_t kZenShotFired = 0x476B15;  // ... a Zen Ball's (Master Hu's power aimed it), the ball at [esp+0x18]
 constexpr uintptr_t kAimAtMouse = 0x4689D0;    // EAX LogicMgr, stdcall(float x, float y) -> ST0 (6-byte prologue)
 constexpr uintptr_t kClampAim = 0x468D00;      // ESI LogicMgr, stdcall(float): stores LogicMgr+0xEC (7 bytes)
 constexpr uintptr_t kTurnGun = 0x476DE9;       // call: the cannon follows the aim each tick
@@ -153,6 +181,7 @@ constexpr uintptr_t kSoundPop = 0x6CA5C0;      // SOUND_FAIRY_POP
 constexpr uintptr_t kSoundWoosh = 0x6CAA20;    // SOUND_TEXT_WOOSH
 constexpr uintptr_t kSoundBuzz = 0x6CA6A0;     // SOUND_LOGO_BUZZ_ON (the PopCap logo's neon)
 constexpr uintptr_t kSoundPowerUp = 0x6CA8B8;  // SOUND_POWERUP
+constexpr uintptr_t kSoundFireballBounce = 0x6CAAD8;  // SOUND_FIREBALLBOUNCE
 
 // A text floating up over the board, as the game names a power ("Spooky Ball!") when its peg is hit.
 constexpr uintptr_t kShowText = 0x468DD0;  // EAX LogicMgr, EDI font (-1: the usual), stdcall(const string*, x, y)
@@ -232,7 +261,7 @@ uint32_t Bits(float f)
 }
 
 // ---- Calling the game ----
-void SetPegType(void* peg, int kind)
+GAME_CALL void SetPegType(void* peg, int kind)
 {
     __asm {
         mov ecx, peg
@@ -242,7 +271,7 @@ void SetPegType(void* peg, int kind)
     }
 }
 
-void Flash(void* peg)
+GAME_CALL void Flash(void* peg)
 {
     void* info = PegInfo(peg);
     __asm {
@@ -253,7 +282,7 @@ void Flash(void* peg)
     }
 }
 
-int SetErase(void* set, void* peg)
+GAME_CALL int SetErase(void* set, void* peg)
 {
     void* key = peg;
     int n;
@@ -267,7 +296,7 @@ int SetErase(void* set, void* peg)
     return n;
 }
 
-void SetInsert(void* set, void* peg)
+GAME_CALL void SetInsert(void* set, void* peg)
 {
     void* key = peg;
     uint8_t result[12];
@@ -298,7 +327,7 @@ void Recolor(void* lm, void* peg, int type)
     }
 }
 
-void SetRadius(void* ball, float r)
+GAME_CALL void SetRadius(void* ball, float r)
 {
     __asm {
         push r
@@ -308,7 +337,7 @@ void SetRadius(void* ball, float r)
     }
 }
 
-void Teleport(void* ball, float x, float y)
+GAME_CALL void Teleport(void* ball, float x, float y)
 {
     __asm {
         push y
@@ -333,7 +362,7 @@ void Release(void* obj)
 }
 
 // A new ball on the board, as Multiball makes one.
-void AddBall(void* board, void* ball)
+GAME_CALL void AddBall(void* board, void* ball)
 {
     void* pm = F<void*>(board, kBoardOffPhysics);
     void* axis1 = static_cast<char*>(pm) + 4;
@@ -351,7 +380,7 @@ void AddBall(void* board, void* ball)
     reinterpret_cast<void(__thiscall*)(void*, void*)>(kAddObject)(board, ball);
 }
 
-void* NewBall()
+GAME_CALL void* NewBall()
 {
     void* b = game::GameNew(kBallSize);
     __asm {
@@ -364,7 +393,7 @@ void* NewBall()
     return b;
 }
 
-void SetGunAngle(void* gun, float a, bool immediate)
+GAME_CALL void SetGunAngle(void* gun, float a, bool immediate)
 {
     int imm = immediate ? 1 : 0;
     __asm {
@@ -373,6 +402,102 @@ void SetGunAngle(void* gun, float a, bool immediate)
         mov eax, gun
         mov ecx, kSetGunAngle
         call ecx
+    }
+}
+
+GAME_CALL void Catch(void* lm, void* hole, void* ball)
+{
+    __asm {
+        push ball
+        mov esi, hole
+        mov ecx, lm
+        mov eax, kCatch
+        call eax
+    }
+}
+
+GAME_CALL void CopyBallKind(void* ball)
+{
+    __asm {
+        push 1
+        push ball
+        mov eax, kCopyBallKind
+        call eax
+    }
+}
+
+// Whether the ball touches the peg soon: within a share of its next move, or a margin.
+GAME_CALL bool NearPeg(void* ball, void* peg, float share, float margin)
+{
+    uint8_t near_peg;
+    __asm {
+        push margin
+        push share
+        mov eax, peg
+        mov ecx, ball
+        mov edx, kNearPeg
+        call edx
+        mov near_peg, al
+    }
+    return near_peg != 0;
+}
+
+GAME_CALL void StartSlowMo(void* lm)
+{
+    __asm {
+        mov ebx, lm
+        mov eax, kStartSlowMo
+        call eax
+    }
+}
+
+GAME_CALL void SetSlowMo(void* board, int speed)
+{
+    __asm {
+        mov edi, board
+        mov al, 1
+        mov ecx, speed
+        mov edx, kSetSlowMo
+        call edx
+    }
+}
+
+GAME_CALL void SwitchPower(void* lm, int power, bool on)
+{
+    int on_arg = on;
+    __asm {
+        push on_arg
+        push power
+        push lm
+        mov eax, kSwitchPower
+        call eax
+    }
+}
+
+// What a turn's beginning does for these powers, at once (testing).
+GAME_CALL void PowerTurnBegins(void* lm, int power, bool on)
+{
+    void* gun = F<void*>(F<void*>(lm, kLogicOffBoard), kBoardOffGun);
+    int on_arg = on;
+    if (power == kPowerPyramid) {
+        __asm {
+            push on_arg
+            push lm
+            mov eax, kSwitchPyramid
+            call eax
+        }
+    } else if (power == kPowerLightning && on && gun) {
+        __asm {
+            mov esi, gun
+            mov eax, kChargeBall
+            call eax
+        }
+    } else if (power == kPowerFireball && on && gun) {
+        __asm {
+            mov eax, gun
+            mov ecx, kFireBall
+            call ecx
+        }
     }
 }
 
@@ -512,7 +637,7 @@ void* g_bomb;
 int g_bomb_index = -1;
 bool g_bomb_blown;
 
-void SpaceBlast(void* lm, void* ball, void* peg)
+GAME_CALL void SpaceBlast(void* lm, void* ball, void* peg)
 {
     __asm {
         mov eax, peg
@@ -642,14 +767,8 @@ void __cdecl OnShotFired(void* lm, void* ball)
     F<uint8_t>(twin, kBallOffHitsBalls) = 0;
     F<uint8_t>(twin, kBallOffFireball) = F<uint8_t>(ball, kBallOffFireball);
     AddBall(g_board, twin);
-    if (F<int>(ball, kBallOffCompanion) || F<uint8_t>(ball, kBallOffGhost)) {
-        __asm {
-            push 1
-            push twin
-            mov eax, kCopyBallKind
-            call eax
-        }
-    }
+    if (F<int>(ball, kBallOffCompanion) || F<uint8_t>(ball, kBallOffGhost))
+        CopyBallKind(twin);
     Release(twin);  // the board holds it now
     ++g_n_twins;
 }
@@ -661,6 +780,19 @@ __declspec(naked) void ShotFiredHook()  // replaces a call; EBX = LogicMgr, the 
     __asm {
         pushad
         push dword ptr [ebp - 0x14]
+        push ebx
+        call OnShotFired
+        add esp, 8
+        popad
+        jmp dword ptr [g_orig_shot_bookkeeping]
+    }
+}
+
+__declspec(naked) void ZenShotFiredHook()  // the same, the ball at the caller's [esp+0x18]
+{
+    __asm {
+        pushad
+        push dword ptr [esp + 0x20 + 4 + 0x18]  // (past what pushad saved and the return address)
         push ebx
         call OnShotFired
         add esp, 8
@@ -789,11 +921,13 @@ void ThroughPortals(void* ball)
 // ---- The bucket: Double Bucket, Teleporting Bucket, and Upside Down's ----
 std::vector<void*> g_bucket;  // its parts: the catcher and its lips, the pyramid version, the lid
 void* g_hole;                 // the catcher
+void* g_lid;                  // the lid (a Brick): on for a Fireball's turn (a fireball knocks it off), a Spooky Ball's
+bool g_flipped;               // Upside Down (below): the bucket along the top
 
 void FindBucket(void* board)
 {
     g_bucket.clear();
-    g_hole = nullptr;
+    g_hole = g_lid = nullptr;
     for (void* obj : List(board, kBoardOffObjects)) {
         std::string id = Id(obj);
         if (id != "freeball" && id != "bumperhole" && id != "freeballcover")
@@ -803,33 +937,109 @@ void FindBucket(void* board)
         g_bucket.push_back(obj);
         if (!g_hole && id == "freeball" && F<int>(obj, kObjOffKind) == kKindHole)
             g_hole = obj;
+        if (id == "freeballcover")
+            g_lid = obj;
     }
 }
 
 void* Mover(void* part) { return F<void*>(part, kObjOffMover); }
+bool LidOn() { return g_lid && F<uint8_t>(g_lid, kObjOffCollides); }
 
 // Double Bucket: the bucket keeps to the left half of its track, a copy of it (drawn by us, catching with the
-// game's own catch) to the right half, side by side.
+// game's own catch) to the right half, side by side. The game eases the track's width towards a goal it sets each
+// turn (narrower with Flippers or the Pyramid): halved too while the copy is there.
 constexpr float kTwinOffset = 260;
 std::vector<void*> g_pending_catches;  // balls in the copy, caught after the step's ball loop
 
+int TrackGoal(void* lm)  // the width the game wants for the player in turn
+{
+    int p = F<int>(lm, kLogicOffPlayer);
+    if (F<int>(lm, kLogicOffPowerTurns + 8 * kPowerFlippers + 4 * p))
+        return 130;
+    return F<int>(lm, kLogicOffPowerTurns + 8 * kPowerPyramid + 4 * p) ? 200 : 260;
+}
+
 void SplitBucket(bool on)
 {
+    if (Fever(g_board))  // (Extreme Fever has taken the bucket away along a track of its own)
+        return;
     for (void* part : g_bucket) {
         void* m = Mover(part);
         F<float>(m, kMoverOffBaseX) += on ? -kTwinOffset / 2 : kTwinOffset / 2;
         F<int>(m, kMoverOffRadius) = on ? F<int>(m, kMoverOffRadius) / 2 : F<int>(m, kMoverOffRadius) * 2;
     }
+    void* lm = Logic(g_board);
+    int& goal = F<int>(lm, kLogicOffTrackGoal);
+    if (goal)
+        goal = on ? TrackGoal(lm) / 2 : TrackGoal(lm);
+}
+
+// The game eases the width each logic step it has a goal, before the effects' step: the goal it set (it only sets
+// whole widths) is halved as it gets there.
+constexpr uintptr_t kEaseTrack = 0x47727D;  // call: stdcall(LogicMgr), when LogicMgr+0x1B8 is set
+uintptr_t g_orig_ease_track;
+
+void __stdcall EaseTrackHook(void* lm)
+{
+    int& goal = F<int>(lm, kLogicOffTrackGoal);
+    if (On(kDoubleBucket) && Ours(lm) && !Fever(g_board) && goal != TrackGoal(lm) / 2)
+        goal = TrackGoal(lm) / 2;
+    reinterpret_cast<void(__stdcall*)(void*)>(g_orig_ease_track)(lm);
 }
 
 bool InTwinBucket(void* ball)
 {
-    if (!g_hole || !F<uint8_t>(g_hole, kObjOffAlive) || Fever(g_board))
+    if (!g_hole || !F<uint8_t>(g_hole, kObjOffAlive) || Fever(g_board) || LidOn())
         return false;
     float hx = F<float>(g_hole, kHoleOffX) + kTwinOffset, hy = F<float>(g_hole, kHoleOffY);
-    float hw = F<float>(g_hole, kHoleOffW) / 2, hh = F<float>(g_hole, kHoleOffH) / 2;
+    float hw = F<int>(g_hole, kHoleOffW) / 2.0f, hh = F<int>(g_hole, kHoleOffH) / 2.0f;
     float x = F<float>(ball, kBallOffX), y = F<float>(ball, kBallOffY);
     return x >= hx - hw && x <= hx + hw && y >= hy - hh && y <= hy + hh;
+}
+
+// A catch shows its texts (a bonus, "Bucket Bonus!") 60 pixels over the bucket: upside down that would be off the
+// board, so they go 60 under it, the bucket's place moved down for the catch (as the copy's is moved along).
+constexpr float kCatchTextDrop = 120;
+constexpr uintptr_t kCatchCall = 0x471906;  // call: the step's catches, ECX LogicMgr, ESI hole, stdcall(ball)
+uint32_t g_n_bucket_catches;  // testing: catches in the bucket upside down
+
+void CatchAt(void* lm, void* hole, void* ball, float dx)
+{
+    float& x = F<float>(hole, kHoleOffX);
+    float& y = F<float>(hole, kHoleOffY);
+    float dy = g_flipped ? kCatchTextDrop : 0;
+    x += dx;
+    y += dy;
+    Catch(lm, hole, ball);
+    x -= dx;
+    y -= dy;
+}
+
+uintptr_t g_orig_catch;
+void __cdecl CatchUpsideDown(void* lm, void* hole, void* ball)
+{
+    if (hole == g_hole && Ours(lm)) {
+        ++g_n_bucket_catches;
+        CatchAt(lm, hole, ball, 0);
+    } else {
+        Catch(lm, hole, ball);
+    }
+}
+
+__declspec(naked) void CatchHook()  // replaces a call: ECX LogicMgr, ESI hole, stdcall(ball)
+{
+    __asm {
+        cmp g_flipped, 0
+        je original
+        push dword ptr [esp + 4]
+        push esi
+        push ecx
+        call CatchUpsideDown
+        add esp, 12
+        ret 4
+    original:
+        jmp dword ptr [g_orig_catch]
+    }
 }
 
 void CatchPending()
@@ -838,22 +1048,110 @@ void CatchPending()
     balls.swap(g_pending_catches);
     for (void* ball : balls) {
         if (On(kDoubleBucket) && g_hole && IndexOf(Balls(g_board), ball) >= 0) {
-            void* lm = Logic(g_board);
-            void* hole = g_hole;
-            float& hx = F<float>(hole, kHoleOffX);
-            hx += kTwinOffset;  // its effects where the ball fell in
-            __asm {
-                push ball
-                mov esi, hole
-                mov ecx, lm
-                mov eax, kCatch
-                call eax
-            }
-            hx -= kTwinOffset;
+            CatchAt(Logic(g_board), g_hole, ball, kTwinOffset);  // its effects where the ball fell in
             ++g_n_catches;
             Log("chaos: a ball fell into the second bucket");
         }
         Release(ball);
+    }
+}
+
+// The copy collides as the bucket does: the bucket's parts that collide (its lips, and while they're on the
+// pyramid's sides and the lid) have their edges 260 pixels along too, and a ball moving into one bounces off it the
+// way the game bounces balls off Polys (the part's bounce, a slow ball sliding along). A fireball meeting the lid
+// knocks it off as on the bucket (one lid: both lose it). Parts whose place there the bucket's own parts already
+// take are left out (the pyramid's sides cross there: both would make a dip a ball could rest in).
+constexpr int kPolyOffBounce = 0x34, kPolyOffSlide = 0x38, kPolyOffMaxBounce = 0x3C;  // (0: 0.82, 1.4, none)
+uint32_t g_n_twin_bounces, g_n_lid_knocks;  // testing
+
+bool Collider(void* part)
+{
+    return part != g_hole && F<int>(part, kObjOffKind) == 5 && F<uint8_t>(part, kObjOffCollides);
+}
+
+bool BounceOffEdges(void* ball, void* part, float dx)  // the part dx along: whether the ball bounced off it
+{
+    float r = F<float>(ball, kBallOffRadius);
+    float bx = F<float>(ball, kBallOffX), by = F<float>(ball, kBallOffY);
+    if (bx + r < F<float>(part, kObjOffLeft) + dx || bx - r > F<float>(part, kObjOffRight) + dx ||
+        by + r < F<float>(part, kObjOffTop) || by - r > F<float>(part, kObjOffBottom))
+        return false;
+    const float* p = F<float*>(part, kPolyOffPoints);
+    const float* end = F<float*>(part, kPolyOffPoints + 4);
+    float px = F<float>(part, kPolyOffX) + dx, py = F<float>(part, kPolyOffY);
+    float best = r, cx = 0, cy = 0, nx = 0, ny = 0;
+    for (; p && p + 3 < end; p += 2) {  // the nearest edge it overlaps
+        float x0 = px + p[0], y0 = py + p[1], ex = p[2] - p[0], ey = p[3] - p[1], len2 = ex * ex + ey * ey;
+        if (len2 <= 0)
+            continue;
+        float t = ((bx - x0) * ex + (by - y0) * ey) / len2;
+        t = t < 0 ? 0 : t > 1 ? 1 : t;
+        float qx = x0 + t * ex, qy = y0 + t * ey, d = sqrtf((bx - qx) * (bx - qx) + (by - qy) * (by - qy));
+        if (d >= best)
+            continue;
+        float len = sqrtf(len2), ox = -ey / len, oy = ex / len;  // its outward normal (the game's turn of points)
+        best = d;
+        cx = qx;
+        cy = qy;
+        if (d > 0.001f && (bx - qx) * ox + (by - qy) * oy > 0) {
+            nx = (bx - qx) / d;
+            ny = (by - qy) / d;
+        } else {  // (its centre past the edge: out the way the edge faces)
+            nx = ox;
+            ny = oy;
+        }
+    }
+    if (best >= r)
+        return false;
+    float vx = F<float>(ball, kBallOffVX), vy = F<float>(ball, kBallOffVY), vn = vx * nx + vy * ny;
+    if (vn >= 0)
+        return false;  // (on its way out already)
+    float bounce = F<float>(part, kPolyOffBounce), slide = F<float>(part, kPolyOffSlide);
+    if (-vn * (fabsf(nx) > 0.99f ? 5 : 1) <= (slide > 0 ? slide : 1.4f)) {  // too slow: it slides along
+        vx -= vn * nx;
+        vy -= vn * ny;
+    } else {
+        float e = bounce > 0 ? bounce : 0.82f;
+        vx = e * (vx - 2 * vn * nx);
+        vy = e * (vy - 2 * vn * ny);
+    }
+    float cap = F<float>(part, kPolyOffMaxBounce), speed = sqrtf(vx * vx + vy * vy);
+    if (cap > 0 && speed > cap) {
+        vx *= cap / speed;
+        vy *= cap / speed;
+    }
+    SetPos(ball, cx + nx * (r + 0.05f), cy + ny * (r + 0.05f));
+    SetVelocity(ball, vx, vy);
+    return true;
+}
+
+bool TakenByBucket(void* part)  // the copy's part where the bucket's own colliding parts are
+{
+    for (void* own : g_bucket)
+        if (Collider(own) && F<float>(part, kObjOffLeft) + kTwinOffset < F<float>(own, kObjOffRight) &&
+            F<float>(part, kObjOffRight) + kTwinOffset > F<float>(own, kObjOffLeft))
+            return true;
+    return false;
+}
+
+void TwinColliders(void* ball)
+{
+    if (!g_hole || Fever(g_board))
+        return;
+    for (void* part : g_bucket) {
+        if (!Collider(part) || TakenByBucket(part) || !BounceOffEdges(ball, part, kTwinOffset))
+            continue;
+        ++g_n_twin_bounces;
+        if (part == g_lid && F<uint8_t>(ball, kBallOffFireball)) {
+            F<uint8_t>(ball, kBallOffKnockedLid) = 1;
+            void* challenge = F<void*>(g_board, kBoardOffChallenge);
+            if (!challenge || !F<uint8_t>(challenge, kChallengeOffCovered))
+                VCall<void(__thiscall*)(void*, int)>(g_lid, kObjSlotSetActive)(g_lid, 0);
+            ui::PlaySound(kSoundFireballBounce);
+            ++g_n_lid_knocks;
+            Log("chaos: a fireball knocked the lid off at the second bucket");
+        }
+        return;  // (one bounce a step)
     }
 }
 
@@ -882,10 +1180,11 @@ void TeleportBucket(void* board)
 {
     if (!g_hole || Fever(board) || Ticks(kTeleportingBucket) < g_next_teleport)
         return;
-    for (void* ball : Balls(board)) {  // not while a ball is at the bucket: the jump would fling it
+    // Not while a ball is as low as the bucket (as high, upside down): a part landing on it, where the bucket is or
+    // where it goes, would fling it (the pyramid's sides reach 200 pixels either way).
+    for (void* ball : Balls(board)) {
         float dy = F<float>(ball, kBallOffY) - F<float>(g_hole, kHoleOffY);
-        float dx = F<float>(ball, kBallOffX) - F<float>(g_hole, kHoleOffX);
-        if (dy * dy + dx * dx < 110.0f * 110.0f)
+        if (dy * dy < 75.0f * 75.0f)
             return;
     }
     uint32_t jump = 120 + Random(361);  // ticks along its 600-tick track
@@ -900,18 +1199,78 @@ void TeleportBucket(void* board)
 }
 
 // ---- Upside Down: gravity up, the cannon at the bottom, the bucket at the top ----
-bool g_flipped;
 float g_spooky_y = 10;  // where a Spooky Ball comes back (the game's 10, read from here)
 
-// The part in the game's code (the board's objects are turned over by Flip, and kept so in its copies).
+// The part in the game's code (the board's objects are turned over by Flip, and kept so in its copies). The
+// computer opponent's guesses go with it: where Chain Lightning's rod is, when to flip Claude's flippers.
 void SetFlipped(bool on)
 {
     if (g_flipped == on)
         return;
     g_flipped = on;
-    uint8_t op = on ? 0x25 : 0x05;
+    uint8_t op = on ? 0x25 : 0x05, rod_op = on ? 0x05 : 0x25;
     PatchBytes(kGravityOp, &op, 1);
+    PatchBytes(kAiRodOp, &rod_op, 1);
+    uint32_t low = on ? 116 : 400, high = on ? 266 : 550;  // (mirrored: 76 < y < 226 for 360 < y < 510)
+    PatchBytes(kAiFlipperLow, &low, 4);
+    PatchBytes(kAiFlipperHigh, &high, 4);
     g_spooky_y = on ? kFieldH - 10 : 10;
+}
+
+// A shape turned over about its own position: its points' y the other way, then their order reversed too, so that
+// its edges keep facing out (the game's collisions take one side of each).
+GAME_CALL void ReverseShape(void* poly)
+{
+    __asm {
+        push poly
+        mov eax, kReverseShape
+        call eax
+    }
+}
+
+void MirrorShape(void* poly)
+{
+    float* p = F<float*>(poly, kPolyOffPoints);
+    float* end = F<float*>(poly, kPolyOffPoints + 4);
+    if (!p || end - p < 4)
+        return;
+    for (; p + 1 < end; p += 2)
+        p[1] = -p[1];
+    ReverseShape(poly);
+    F<uint8_t>(poly, kPolyOffTurned) = 1;
+    F<uint8_t>(poly, kPolyOffMoved) = 1;
+}
+
+// Claude's flippers (Polys turning about a pivot) at the top: the pivot's height, the shape, the way it turns and
+// the turn so far all mirrored, so the swing goes down and the push off it is mirrored too (and the drawing,
+// FlipperDraw). The picture's offset as well, for drawing without 3D acceleration.
+bool IsFlipper(void* obj) { return Mover(obj) && Id(obj) == "flipper"; }
+
+void MirrorFlipper(void* flipper)
+{
+    void* m = Mover(flipper);
+    F<int>(m, kMoverOffType) = -F<int>(m, kMoverOffType);
+    F<float>(m, kMoverOffTurn) = -F<float>(m, kMoverOffTurn);
+    F<float>(m, kMoverOffAngle) = -F<float>(m, kMoverOffAngle);
+    F<float>(m, kMoverOffBaseY) = kBucketMirror - F<float>(m, kMoverOffBaseY);
+    F<float>(m, kMoverOffY) = kBucketMirror - F<float>(m, kMoverOffY);
+    F<float>(flipper, kPolyOffY) = kBucketMirror - F<float>(flipper, kPolyOffY);
+    F<float>(flipper, kPolyOffAngle) = -F<float>(flipper, kPolyOffAngle);
+    F<float>(flipper, kPolyOffSpin) = -F<float>(flipper, kPolyOffSpin);
+    F<float>(flipper, kPolyOffDrawAngle) = -F<float>(flipper, kPolyOffDrawAngle);
+    F<float>(flipper, kPolyOffPictureY) = -F<float>(flipper, kPolyOffPictureY);
+    MirrorShape(flipper);
+}
+
+// The bucket's parts that only collide (drawn ones are turned over as they're drawn): its lips, the pyramid's sides.
+// (The lid keeps its shape: a Brick makes its picture from it.)
+bool BucketCollider(void* part)
+{
+    if (F<uint32_t>(part, 0) != kPolyVtable)
+        return false;
+    std::string id = Id(part);
+    return id == "freeball" ? !F<uint8_t>(part, kPolyOffShown)
+                            : id == "bumperhole" && !F<uint8_t>(part, kPolyOffDrawnOnly);
 }
 
 void Flip(void* board, bool on)
@@ -927,8 +1286,14 @@ void Flip(void* board, bool on)
     }
     SetCollides(g_walls[2], !on);  // out through the top
     // The bucket's parts mirrored to the top (its lips where its opening now is), drawn turned over (BucketDraw).
-    for (void* part : g_bucket)
+    for (void* part : g_bucket) {
         F<float>(Mover(part), kMoverOffBaseY) = kBucketMirror - F<float>(Mover(part), kMoverOffBaseY);
+        if (BucketCollider(part))
+            MirrorShape(part);
+    }
+    for (void* obj : List(board, kBoardOffObjects))
+        if (IsFlipper(obj))
+            MirrorFlipper(obj);
     Log("chaos: upside %s", on ? "down" : "up again");
 }
 
@@ -1001,7 +1366,7 @@ void* g_aim_tramp;
 void* g_clamp_tramp;
 uintptr_t g_orig_turn_gun;
 
-float CallAimAtMouse(void* lm, float x, float y)
+GAME_CALL float CallAimAtMouse(void* lm, float x, float y)
 {
     float r;
     __asm {
@@ -1067,38 +1432,17 @@ void BulletTime(void* ball, void* board)
     void* lm = Logic(board);
     if (F<int>(lm, kLogicOffState) != kStateBallInPlay || Fever(board))
         return;
-    float one = 1.0f, margin = kNearOrange;
     for (void* peg : UnhitPegs(lm, kOrange)) {
         if (IndexOf(g_slowed, peg) >= 0)
             continue;
-        uint8_t near_peg;
-        __asm {
-            push margin
-            push one
-            mov eax, peg
-            mov ecx, ball
-            mov edx, kNearPeg
-            call edx
-            mov near_peg, al
-        }
-        if (!near_peg)
+        if (!NearPeg(ball, peg, 1.0f, kNearOrange))
             continue;
         g_slowed.push_back(peg);
         ++g_n_slow;
         if (!F<uint8_t>(board, kBoardOffSlowMo)) {
-            __asm {
-                mov ebx, lm
-                mov eax, kStartSlowMo
-                call eax
-            }
+            StartSlowMo(lm);
         } else {  // already slow: slowest again, without the sound
-            __asm {
-                mov edi, board
-                mov al, 1
-                mov ecx, 100
-                mov edx, kSetSlowMo
-                call edx
-            }
+            SetSlowMo(board, 100);
             F<int>(board, kBoardOffSlowHold) = 100;
             F<uint8_t>(board, kBoardOffZoomRequest) = 1;
         }
@@ -1220,18 +1564,7 @@ bool Touches(void* peg, float x, float y, float dx, float dy, float r, float sha
     F<float>(ball, kBallOffVX) = dx;
     F<float>(ball, kBallOffVY) = dy;
     F<float>(ball, kBallOffRadius) = r;
-    float margin = 0;
-    uint8_t touches;
-    __asm {
-        push margin
-        push share
-        mov eax, peg
-        mov ecx, ball
-        mov edx, kNearPeg
-        call edx
-        mov touches, al
-    }
-    return touches != 0;
+    return NearPeg(ball, peg, share, 0);
 }
 
 // The share (0..1) of a ball's move from (x, y) by (dx, dy) at which it first touches a fake, or -1.
@@ -1349,9 +1682,17 @@ bool FakesHidden() { return g_blackout == kBlackoutSoon || g_blackout == kFading
 bool g_drop_in;  // testing: the next ball steps into the second bucket
 
 // ---- Each ball, each physics step, after it moved ----
+bool g_place;          // testing: the next ball to step is put here, at this speed (playfield)
+float g_place_at[4];
+
 void __cdecl OnBallStep(void* ball, void* board)
 {
     ++g_n_steps;
+    if (g_place) {
+        g_place = false;
+        Teleport(ball, g_place_at[0], g_place_at[1]);
+        SetVelocity(ball, g_place_at[2], g_place_at[3]);
+    }
     if (!g_active || board != g_board)
         return;
     if (On(kWrapAround)) {
@@ -1368,6 +1709,7 @@ void __cdecl OnBallStep(void* ball, void* board)
             g_drop_in = false;
             Teleport(ball, F<float>(g_hole, kHoleOffX) + kTwinOffset, F<float>(g_hole, kHoleOffY));
         }
+        TwinColliders(ball);
         if (InTwinBucket(ball) && IndexOf(g_pending_catches, ball) < 0) {
             InterlockedIncrement(&F<LONG>(ball, kObjOffRefs));
             g_pending_catches.push_back(ball);
@@ -1541,7 +1883,7 @@ constexpr int kGraphicsOffTransX = 0x08, kGraphicsOffTransY = 0x0C, kGraphicsOff
 constexpr int kGraphicsOffScale = 0x10;  // float x, y, then the point it scales about (with the translation in)
 constexpr int kGraphicsOffClip = 0x20;   // Rect, with the translation in
 constexpr int kGraphicsOffColorize = 0x48, kGraphicsOffIs3D = 0x4C;
-constexpr uintptr_t kHoleVtable = 0x688C5C, kPolyVtable = 0x688B3C;
+constexpr uintptr_t kHoleVtable = 0x688C5C;
 constexpr uintptr_t kMatrixIdentity = 0x5605D0;   // EAX matrix (3x3 floats)
 constexpr uintptr_t kMatrixTranslate = 0x5605F0;  // ESI matrix, stdcall(float x, float y)
 constexpr uintptr_t kMatrixScale = 0x5606B0;      // ESI matrix, stdcall(float x, float y)
@@ -1549,20 +1891,24 @@ constexpr uintptr_t kPushTransform = 0x4FC180;    // EAX D3DInterface, stdcall(c
 constexpr uintptr_t kPopTransform = 0x4FC220;     // EAX D3DInterface
 constexpr int kAppOffDDInterface = 0x36C, kDDOffD3D = 0x30;
 
-// Upside Down: a part of the bucket drawn turned round about its own position (the bucket is the same on both
-// sides, so that is upside down), through the Direct3D transform the game zooms with, as it does: only with 3D
-// acceleration on (without it the parts stay the right way up).
-void DrawTurnedOver(ObjDrawFn draw, void* part, void* g)
+// Upside Down: drawing mirrored about a point of the playfield (scale -1, -1: turned round, which for the bucket is
+// upside down as it's the same on both sides; 1, -1: upside down), through the Direct3D transform the game zooms
+// with, as it does: only with 3D acceleration on (without it things stay the right way up).
+void* D3D(void* g)
 {
     void* dd = F<void*>(game::App(), kAppOffDDInterface);
-    void* d3d = dd ? F<void*>(dd, kDDOffD3D) : nullptr;
-    if (!d3d || !F<uint8_t>(g, kGraphicsOffIs3D)) {
-        draw(part, g);
+    return dd && F<uint8_t>(g, kGraphicsOffIs3D) ? F<void*>(dd, kDDOffD3D) : nullptr;
+}
+
+GAME_CALL void DrawMirrored(ObjDrawFn draw, void* obj, void* g, float x, float y, float scale_x, float scale_y)
+{
+    void* d3d = D3D(g);
+    if (!d3d) {
+        draw(obj, g);
         return;
     }
-    float centre_x = F<float>(Mover(part), kMoverOffX) + F<float>(g, kGraphicsOffTransX);
-    float centre_y = F<float>(Mover(part), kMoverOffY) + F<float>(g, kGraphicsOffTransY);
-    float back_x = -centre_x, back_y = -centre_y, flip = -1.0f;  // (no names of registers in here: cx is one)
+    float centre_x = x + F<float>(g, kGraphicsOffTransX), centre_y = y + F<float>(g, kGraphicsOffTransY);
+    float back_x = -centre_x, back_y = -centre_y;  // (no names of registers in here: cx is one)
     float matrix[9];
     float* m = matrix;
     __asm {
@@ -1574,8 +1920,8 @@ void DrawTurnedOver(ObjDrawFn draw, void* part, void* g)
         push back_x
         mov ecx, kMatrixTranslate
         call ecx
-        push flip
-        push flip
+        push scale_y
+        push scale_x
         mov ecx, kMatrixScale
         call ecx
         push centre_y
@@ -1587,12 +1933,17 @@ void DrawTurnedOver(ObjDrawFn draw, void* part, void* g)
         mov ecx, kPushTransform
         call ecx
     }
-    draw(part, g);
+    draw(obj, g);
     __asm {
         mov eax, d3d
         mov ecx, kPopTransform
         call ecx
     }
+}
+
+void DrawTurnedOver(ObjDrawFn draw, void* part, void* g)  // a part of the bucket, about its own position
+{
+    DrawMirrored(draw, part, g, F<float>(Mover(part), kMoverOffX), F<float>(Mover(part), kMoverOffY), -1, -1);
 }
 
 void DrawBucketPart(ObjDrawFn draw, void* part, void* g)
@@ -1603,8 +1954,208 @@ void DrawBucketPart(ObjDrawFn draw, void* part, void* g)
         draw(part, g);
 }
 
+// A flipper turned over (MirrorFlipper) draws as the flipper the right way up would, at its turn the other way, and
+// that upside down about its pivot. (Without 3D acceleration: at its own turn, the picture not mirrored.)
+void FlipperDraw(void* flipper, void* g)
+{
+    if (!D3D(g)) {
+        g_poly_draw(flipper, g);
+        return;
+    }
+    float& angle = F<float>(flipper, kPolyOffDrawAngle);
+    float& picture_y = F<float>(flipper, kPolyOffPictureY);
+    angle = -angle;
+    picture_y = -picture_y;
+    DrawMirrored(g_poly_draw, flipper, g, F<float>(flipper, kPolyOffX), F<float>(flipper, kPolyOffY), 1, -1);
+    angle = -angle;
+    picture_y = -picture_y;
+}
+
 void __fastcall HoleDraw(void* obj, void*, void* g) { DrawBucketPart(g_hole_draw, obj, g); }
-void __fastcall PolyDraw(void* obj, void*, void* g) { DrawBucketPart(g_poly_draw, obj, g); }
+
+void __fastcall PolyDraw(void* obj, void*, void* g)
+{
+    if (g_flipped && IsFlipper(obj))
+        FlipperDraw(obj, g);
+    else
+        DrawBucketPart(g_poly_draw, obj, g);
+}
+
+// ---- Marina's Chain Lightning: the rod on the bucket ----
+// While a shot carries it a rod rises out of the bucket (to 512 from 586: 44 over the bucket's middle), and the
+// shot's first peg hit sends an arc through the pegs between to the rod. Upside down the rod moves as it would and
+// its height is mirrored wherever it's used: the arc's way (at the hit), its sparks, and the drawing (the rod
+// turned over, the arc, and the pegs it would take, shown while aiming). With Double Bucket the arc goes to the
+// nearer bucket, the rod moving there for it (it falls back there, and rises from the first one again); while it's
+// up on the first one, the copy shows one too.
+constexpr int kLogicOffRod = 0x74;
+constexpr int kRodOffState = 0x00, kRodOffBaseX = 0x04, kRodOffX = 0x0C;  // ints (x: where it's drawn)
+constexpr int kRodOffY = 0x10;                                           // float
+constexpr uintptr_t kZap = 0x470E48;       // call: PegHit's arc, stdcall(LogicMgr, ball, peg)
+constexpr uintptr_t kRodSpark = 0x438D58;  // call: a spark at the struck rod, stdcall(kind, x, y, ...)
+constexpr uintptr_t kZapPreview = 0x4776C7;  // call: the pegs it would take (drawn), ECX LogicMgr, EAX peg, stdcall(2)
+constexpr uintptr_t kDrawRod = 0x40CA7F;   // call: thiscall(LogicMgr), stdcall(Graphics*)
+
+void* Rod(void* lm) { return lm ? F<void*>(lm, kLogicOffRod) : nullptr; }
+bool RodOnBucket(int state) { return state == 1 || state == 2 || state == 7 || state == 8; }  // up, following it
+// Testing: arcs, and the last one's end (playfield), whether it went to the copy, its peg, where the rod was then.
+uint32_t g_n_zaps;
+float g_zap_x, g_zap_y, g_zap_peg_x, g_zap_peg_y, g_zap_rod_x;
+bool g_zap_twin;
+
+// Whether the arc from a peg (or the pegs it would take, from the guide's first peg) goes to the copy.
+bool ZapToTwin(void* lm, void* peg, void* rod)
+{
+    if (!On(kDoubleBucket) || !g_hole || Fever(g_board) || !peg || !Ours(lm))
+        return false;
+    float x = CenterX(peg), rod_x = static_cast<float>(F<int>(rod, kRodOffX));
+    return fabsf(x - rod_x - kTwinOffset) < fabsf(x - rod_x);
+}
+
+uintptr_t g_orig_zap;
+
+void __stdcall ZapHook(void* lm, void* ball, void* peg)
+{
+    using ZapFn = void(__stdcall*)(void*, void*, void*);
+    void* rod = Rod(lm);
+    if (!rod) {
+        reinterpret_cast<ZapFn>(g_orig_zap)(lm, ball, peg);
+        return;
+    }
+    bool ours = Ours(lm), twin = ZapToTwin(lm, peg, rod);
+    g_zap_peg_x = CenterX(peg);
+    g_zap_peg_y = CenterY(peg);
+    g_zap_rod_x = static_cast<float>(F<int>(rod, kRodOffX));
+    if (twin) {
+        F<int>(rod, kRodOffBaseX) += static_cast<int>(kTwinOffset);
+        F<int>(rod, kRodOffX) += static_cast<int>(kTwinOffset);
+    }
+    float y = F<float>(rod, kRodOffY);
+    if (ours && g_flipped)
+        F<float>(rod, kRodOffY) = kBucketMirror - y;
+    g_zap_x = static_cast<float>(F<int>(rod, kRodOffX));
+    g_zap_y = F<float>(rod, kRodOffY);
+    reinterpret_cast<ZapFn>(g_orig_zap)(lm, ball, peg);
+    F<float>(rod, kRodOffY) = y;
+    if (twin)
+        F<int>(rod, kRodOffX) = F<int>(rod, kRodOffBaseX);  // (the arc put it back over the first bucket)
+    g_zap_twin = twin;
+    ++g_n_zaps;
+    Log("chaos: Chain Lightning arced to the rod at %.0f,%.0f%s", g_zap_x, g_zap_y,
+        twin ? " (the second bucket)" : "");
+}
+
+uintptr_t g_orig_rod_spark;
+void __cdecl MirrorY(float* y) { *y = kBucketMirror - *y; }
+
+__declspec(naked) void RodSparkHook()  // replaces a call: stdcall(kind, x, y, ...)
+{
+    __asm {
+        cmp g_flipped, 0
+        je original
+        pushad
+        lea eax, [esp + 32 + 12]
+        push eax
+        call MirrorY
+        add esp, 4
+        popad
+    original:
+        jmp dword ptr [g_orig_rod_spark]
+    }
+}
+
+// The pegs it would take, shown while aiming: to the copy, if it's nearer.
+uintptr_t g_orig_zap_preview;
+int g_preview_shift;
+
+void __cdecl PreviewBegins(void* lm, void* peg)
+{
+    void* rod = Rod(lm);
+    g_preview_shift = rod && RodOnBucket(F<int>(rod, kRodOffState)) && ZapToTwin(lm, peg, rod)
+                          ? static_cast<int>(kTwinOffset) : 0;
+    if (g_preview_shift)
+        F<int>(rod, kRodOffX) += g_preview_shift;
+}
+
+void __cdecl PreviewEnds(void* lm)
+{
+    if (g_preview_shift)
+        F<int>(Rod(lm), kRodOffX) -= g_preview_shift;
+    g_preview_shift = 0;
+}
+
+__declspec(naked) void ZapPreviewHook()  // replaces a call: ECX LogicMgr, EAX peg, stdcall(out, out)
+{
+    __asm {
+        pushad
+        push eax
+        push ecx
+        call PreviewBegins
+        add esp, 8
+        popad
+        push ecx                  // (the LogicMgr, for PreviewEnds)
+        push dword ptr [esp + 12]  // the two arguments again
+        push dword ptr [esp + 12]
+        call dword ptr [g_orig_zap_preview]
+        pop ecx
+        pushad
+        push ecx
+        call PreviewEnds
+        add esp, 4
+        popad
+        ret 8
+    }
+}
+
+// The board drawn upside down: the rod's height mirrored for all of it (the rod, the arc, the preview), and back.
+void* g_rod_mirrored;
+float g_rod_y;
+
+void RodMirrorBegins(void* board)
+{
+    void* rod = Rod(Logic(board));
+    if (!g_flipped || board != g_board || !rod)
+        return;
+    g_rod_mirrored = rod;
+    g_rod_y = F<float>(rod, kRodOffY);
+    F<float>(rod, kRodOffY) = kBucketMirror - g_rod_y;
+}
+
+void RodMirrorEnds()
+{
+    if (g_rod_mirrored)
+        F<float>(g_rod_mirrored, kRodOffY) = g_rod_y;
+    g_rod_mirrored = nullptr;
+}
+
+uintptr_t g_orig_draw_rod;
+
+void DrawRodAt(void* lm, void* rod, void* g, float dx)
+{
+    auto draw = reinterpret_cast<ObjDrawFn>(g_orig_draw_rod);
+    float& tx = F<float>(g, kGraphicsOffTransX);
+    tx += dx;
+    if (g_flipped)  // (its height is mirrored already: turned round about where it is)
+        DrawMirrored(draw, lm, g, static_cast<float>(F<int>(rod, kRodOffX)), F<float>(rod, kRodOffY), -1, -1);
+    else
+        draw(lm, g);
+    tx -= dx;
+}
+
+void __fastcall DrawRodHook(void* lm, void*, void* g)  // replaces a call: thiscall(LogicMgr), stdcall(g)
+{
+    void* rod = Rod(lm);
+    if (!rod || !Ours(lm) || (!g_flipped && !On(kDoubleBucket))) {
+        reinterpret_cast<ObjDrawFn>(g_orig_draw_rod)(lm, g);
+        return;
+    }
+    int state = F<int>(rod, kRodOffState);
+    if (g_flipped && state == 0)
+        return;  // (at rest it's in the bucket, below the board; mirrored that would be over its top edge)
+    DrawRodAt(lm, rod, g, 0);
+    if (On(kDoubleBucket) && g_hole && !Fever(g_board) && RodOnBucket(state))
+        DrawRodAt(lm, rod, g, kTwinOffset);
+}
 
 int Pulse(int period, uint32_t ticks)  // 0..255..0 with the board's ticks
 {
@@ -1657,7 +2208,7 @@ uint32_t TintPixel(uint32_t argb, int tint)
     return (argb & 0xFF000000) | Clamp255(nr) << 16 | Clamp255(ng) << 8 | Clamp255(nb);
 }
 
-void* MakeTinted(void* from, int tint)
+GAME_CALL void* MakeTinted(void* from, int tint)
 {
     int w = F<int>(from, game::kImageOffWidth), h = F<int>(from, game::kImageOffHeight);
     int rows = F<int>(from, game::kImageOffRows), cols = F<int>(from, kImageOffCols);
@@ -1716,7 +2267,7 @@ void* Tinted(void* from, int tint)
 }
 
 // A brick's picture of a cell, made now if it hasn't been drawn in that color yet.
-void* BrickImage(void* brick, int cell)
+GAME_CALL void* BrickImage(void* brick, int cell)
 {
     void** images = &F<void*>(brick, kBrickOffImages);
     if (!images[cell]) {
@@ -1790,7 +2341,7 @@ void DrawImageF(void* g, void* image, float x, float y, const ui::Rect& src);
 int Width(void* image) { return F<int>(image, game::kImageOffWidth); }
 int Height(void* image) { return F<int>(image, game::kImageOffHeight); }
 
-void DrawImage(void* g, void* image, int x, int y, const ui::Rect& src)
+GAME_CALL void DrawImage(void* g, void* image, int x, int y, const ui::Rect& src)
 {
     const ui::Rect* r = &src;
     __asm {
@@ -1804,7 +2355,7 @@ void DrawImage(void* g, void* image, int x, int y, const ui::Rect& src)
     }
 }
 
-void DrawBrickCell(void* brick, void* g, int cell)
+GAME_CALL void DrawBrickCell(void* brick, void* g, int cell)
 {
     __asm {
         push g
@@ -1949,7 +2500,7 @@ struct Point {
     int x, y;
 };
 
-void PolyFill(void* g, const Point* pts, int n)
+GAME_CALL void PolyFill(void* g, const Point* pts, int n)
 {
     int convex = 1;
     __asm {
@@ -1962,7 +2513,7 @@ void PolyFill(void* g, const Point* pts, int n)
     }
 }
 
-void SetDrawMode(void* g, int mode)
+GAME_CALL void SetDrawMode(void* g, int mode)
 {
     __asm {
         mov eax, g
@@ -2190,7 +2741,7 @@ void DrawWrapEdges(void* g)
     SetDrawMode(g, 0);
 }
 
-void DrawImageF(void* g, void* image, float x, float y, const ui::Rect& src)
+GAME_CALL void DrawImageF(void* g, void* image, float x, float y, const ui::Rect& src)
 {
     const ui::Rect* r = &src;
     __asm {
@@ -2514,7 +3065,7 @@ void SetRed(void* board, void* peg)
 // "Sabotage!" floating up over it with the power-up sound, as the game names a power when its peg is hit.
 uint32_t g_n_red_texts;  // testing
 
-void RedPegText(void* board, float x, float y)
+GAME_CALL void RedPegText(void* board, float x, float y)
 {
     void* lm = Logic(board);
     game::GameString text("Sabotage!");
@@ -2676,6 +3227,7 @@ void InstallEffects()
     PatchBytes(kSpeedCapSq, &cap_sq, 4);
     PatchBytes(kSpeedCap, &cap, 4);
     g_orig_shot_bookkeeping = HookCall(kShotFired, reinterpret_cast<void*>(ShotFiredHook));
+    HookCall(kZenShotFired, reinterpret_cast<void*>(ZenShotFiredHook));  // (the same function)
     g_ball_step_tramp = HookInline(kBallStep, 6, reinterpret_cast<void*>(BallStepHook));
     g_orig_hit_processing = HookCall(kHitProcessing, reinterpret_cast<void*>(HitProcessingHook));
     g_aim_tramp = HookInline(kAimAtMouse, 6, reinterpret_cast<void*>(AimHook));
@@ -2688,6 +3240,22 @@ void InstallEffects()
     for (uintptr_t at : kSpookyY)
         PatchBytes(at, &spooky_y, 4);
     g_orig_spooky_check = HookCall(kSpookyCheck, reinterpret_cast<void*>(SpookyCheckHook));
+    g_orig_zap = HookCall(kZap, reinterpret_cast<void*>(ZapHook));
+    g_orig_rod_spark = HookCall(kRodSpark, reinterpret_cast<void*>(RodSparkHook));
+    g_orig_zap_preview = HookCall(kZapPreview, reinterpret_cast<void*>(ZapPreviewHook));
+    g_orig_draw_rod = HookCall(kDrawRod, reinterpret_cast<void*>(DrawRodHook));
+    g_orig_catch = HookCall(kCatchCall, reinterpret_cast<void*>(CatchHook));
+    g_orig_ease_track = HookCall(kEaseTrack, reinterpret_cast<void*>(EaseTrackHook));
+}
+
+void BoardDrawBegins(void* board)
+{
+    RodMirrorBegins(board);
+}
+
+void BoardDrawEnds()
+{
+    RodMirrorEnds();
 }
 
 void UpdateEffects()
@@ -3026,6 +3594,15 @@ bool DebugBombAt(float x, float y)  // testing: the unhit peg nearest a screen p
     return true;
 }
 
+void DebugPlaceBall(float x, float y, float vx, float vy)
+{
+    g_place_at[0] = x - 75;
+    g_place_at[1] = y - 40;
+    g_place_at[2] = vx;
+    g_place_at[3] = vy;
+    g_place = true;
+}
+
 bool DebugDropIn()
 {
     if (!On(kDoubleBucket))
@@ -3037,6 +3614,47 @@ bool DebugDropIn()
 void DebugSpooky()
 {
     g_spooky_next = true;
+}
+
+bool DebugPower(void* board, int power, int turns, int player)
+{
+    void* lm = Logic(board);
+    if (!lm || power < 1 || power > 14 || player > 1)
+        return false;
+    int in_turn = F<int>(lm, kLogicOffPlayer);
+    F<int>(lm, kLogicOffPowerTurns + 8 * power + 4 * (player < 0 ? in_turn : player)) = turns;
+    if (player < 0 || player == in_turn) {
+        SwitchPower(lm, power, turns != 0);  // (as each turn begins)
+        PowerTurnBegins(lm, power, turns != 0);
+    }
+    return true;
+}
+
+std::string DebugObjects(const std::string& id)
+{
+    void* board = game::App() ? F<void*>(game::App(), game::kAppOffBoard) : nullptr;
+    if (!board)
+        return "none";
+    std::string out;
+    char buf[400];
+    for (void* obj : List(board, kBoardOffObjects)) {
+        std::string oid = Id(obj);
+        if (id.empty() ? PegInfo(obj) != nullptr : oid != id)
+            continue;
+        void* m = Mover(obj);
+        int n = snprintf(buf, sizeof buf, "%p vt=%X kind=%d id=%s alive=%d collides=%d box=%.1f,%.1f,%.1f,%.1f",
+                         obj, F<uint32_t>(obj, 0), F<int>(obj, kObjOffKind), oid.c_str(),
+                         F<uint8_t>(obj, kObjOffAlive), F<uint8_t>(obj, kObjOffCollides), F<float>(obj, kObjOffLeft),
+                         F<float>(obj, kObjOffTop), F<float>(obj, kObjOffRight), F<float>(obj, kObjOffBottom));
+        if (m)
+            snprintf(buf + n, sizeof buf - n,
+                     " mover=%p type=%d ticks=%d radius=%d period=%d at=%.1f,%.1f base=%.1f,%.1f",
+                     m, F<int>(m, kMoverOffType), F<int>(m, kMoverOffTicks), F<int>(m, kMoverOffRadius), F<int>(m, 0x1C),
+                     F<float>(m, kMoverOffX), F<float>(m, kMoverOffY), F<float>(m, kMoverOffBaseX),
+                     F<float>(m, kMoverOffBaseY));
+        out += (out.empty() ? "" : " | ") + std::string(buf);
+    }
+    return out.empty() ? "none" : out;
 }
 
 std::string EffectDebug()
@@ -3120,7 +3738,7 @@ std::string EffectDebug()
              " redpeg=%d redat=%.0f,%.0f redtype=%d redlit=%d redbrick=%d redmoving=%d redhitat=%u reddrawn=%u "
              "redtexts=%u fakes=%d fakesleft=%d fakesinplaces=%d fakebricks=%d fakemoving=%d fakeat=%s fakebrickat=%s "
              "fakelist=%s fakeshidden=%d glitches=%u guidefakes=%u guidefake=%d,%.0f,%.0f gray=%u tinted=%d "
-             "blackout=%d black=%d blackouts=%u bluebricks=%d bluemoving=%d",
+             "blackout=%d black=%d blackouts=%u bluebricks=%d bluemoving=%d redpicture=%g,%g",
              g_red_index, red_there ? CenterX(g_red) + 75 : -1.0f, red_there ? CenterY(g_red) + 40 : -1.0f,
              red_there ? Type(g_red) : -1, red_there && Lit(g_red) ? 1 : 0, g_red && IsBrick(g_red) ? 1 : 0,
              g_red && F<void*>(g_red, kObjOffMover) ? 1 : 0, g_red_hit_at, g_n_red, g_n_red_texts, g_fake_count, left,
@@ -3128,7 +3746,41 @@ std::string EffectDebug()
              list.empty() ? "-" : list.c_str(), FakesHidden() ? 1 : 0, g_n_glitches, g_n_guide_fakes,
              g_guide_fake_step, g_guide_fake_x + 75,
              g_guide_fake_y + 40, g_n_gray, static_cast<int>(g_tinted.size()), g_blackout, BlackoutAlpha(),
-             g_n_blackouts, blue_bricks, blue_moving);
+             g_n_blackouts, blue_bricks, blue_moving,  // (a red brick's picture: where it is in the brick)
+             g_red && IsBrick(g_red) ? F<float>(g_red, kBrickOffPictureX) : 0.0f,
+             g_red && IsBrick(g_red) ? F<float>(g_red, kBrickOffPictureY) : 0.0f);
+    out += buf;
+    // Masters' powers at the bucket: Claude's flippers (pivots, how far up and down they reach, alive, the way they
+    // turn), the bucket's track width and the goal it's easing to, Chain Lightning's rod (state, where) and its arcs
+    // (where the last ended, to the copy or not, from which peg, the rod then), the lid, bounces off the copy's parts,
+    // fireballs knocking the lid off there, catches upside down, the loaded ball (fireball, charged).
+    void* lm = shown ? Logic(shown) : nullptr;
+    float pivots[4] = {-1, -1, -1, -1}, reach[2] = {1e9f, -1e9f};
+    int alive = 0, turns[2] = {0, 0}, n = 0;
+    if (shown)
+        for (void* obj : List(shown, kBoardOffObjects))
+            if (IsFlipper(obj) && n < 2) {
+                pivots[2 * n] = F<float>(obj, kPolyOffX) + 75;
+                pivots[2 * n + 1] = F<float>(obj, kPolyOffY) + 40;
+                reach[0] = std::min(reach[0], F<float>(obj, kObjOffTop) + 40);
+                reach[1] = std::max(reach[1], F<float>(obj, kObjOffBottom) + 40);
+                alive += F<uint8_t>(obj, kObjOffAlive);
+                turns[n++] = F<int>(Mover(obj), kMoverOffType);
+            }
+    void* rod = Rod(lm);
+    void* shown_gun = shown ? F<void*>(shown, kBoardOffGun) : nullptr;
+    void* loaded = shown_gun ? F<void*>(shown_gun, kGunOffBall) : nullptr;
+    snprintf(buf, sizeof buf,
+             " flippers=%.0f,%.0f,%.0f,%.0f flipreach=%.0f,%.0f flipalive=%d flipturn=%d,%d goal=%d track=%d "
+             "rod=%d,%d,%.0f zaps=%u zapat=%.0f,%.0f zaptwin=%d zappeg=%.0f,%.0f zaprod=%.0f lid=%d twinbounces=%u "
+             "lidknocks=%u upcatches=%u fireball=%d charged=%d",
+             pivots[0], pivots[1], pivots[2], pivots[3], reach[0], reach[1], alive, turns[0], turns[1],
+             lm ? F<int>(lm, kLogicOffTrackGoal) : -1, g_hole ? F<int>(Mover(g_hole), kMoverOffRadius) : -1,
+             rod ? F<int>(rod, kRodOffState) : -1, rod ? F<int>(rod, kRodOffX) + 75 : -1,
+             rod ? F<float>(rod, kRodOffY) + 40 : -1.0f, g_n_zaps, g_zap_x + 75, g_zap_y + 40, g_zap_twin ? 1 : 0,
+             g_zap_peg_x + 75, g_zap_peg_y + 40, g_zap_rod_x + 75, LidOn() ? 1 : 0, g_n_twin_bounces,
+             g_n_lid_knocks, g_n_bucket_catches, loaded ? F<uint8_t>(loaded, kBallOffFireball) : -1,
+             loaded ? F<uint8_t>(loaded, kBallOffCharged) : -1);
     return out + buf;
 }
 

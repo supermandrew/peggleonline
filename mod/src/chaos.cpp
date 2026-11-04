@@ -29,7 +29,17 @@ constexpr int kBoardOffLogic = 0x720;
 constexpr int kLogicOffState = 0x04, kLogicOffReplaying = 0x101, kLogicOffFever = 0x102,
               kLogicOffCurrentPlayer = 0x1AC;
 constexpr int kLogicOffBalls = 0x208;  // int per player (a duel): balls left
-enum LogicState { kAiming = 1, kBallInPlay = 2, kPegsClearing = 3, kOver = 5, kTurnPassing = 6, kIntro = 8, kSelection = 9 };
+constexpr int kLogicOffZenShots = 0x298;  // int per player: Zen Balls to come (Master Hu's power)
+enum LogicState {
+    kAiming = 1,
+    kBallInPlay = 2,
+    kPegsClearing = 3,
+    kOver = 5,
+    kTurnPassing = 6,
+    kIntro = 8,
+    kSelection = 9,
+    kZenShot = 10,  // fired with Master Hu's Zen Ball: the game chooses the shot, then the ball is in play
+};
 
 // Graphics: drawing is scaled about an origin (images, and so the image fonts' letters).
 constexpr int kGraphicsOffScaleX = 0x10, kGraphicsOffScaleY = 0x14, kGraphicsOffScaleOrigX = 0x18,
@@ -117,6 +127,7 @@ std::deque<Effect> g_queue, g_red_queue;
 bool g_switch_pending;
 Effect g_switch_to = kNone;
 bool g_hold;
+uint32_t g_n_zen;  // testing: shots a Zen Ball chose
 // Testing: the bomb moved to the peg nearest a point, at a tick (online: the same tick on both computers, inside
 // the simulation, or the two would differ meanwhile); the red peg likewise.
 bool g_bomb_pending, g_red_pending;
@@ -130,6 +141,8 @@ Effect g_announced = kNone, g_red_announced = kNone;
 constexpr DWORD kPopMs = 260, kHoldMs = 2600, kFadeMs = 450;
 
 void* Logic(void* board) { return board ? game::At<void*>(board, kBoardOffLogic) : nullptr; }
+
+bool InTurn(int st) { return st == kAiming || st == kZenShot || st == kBallInPlay || st == kPegsClearing; }
 
 int CurrentPlayer(void* board) { return game::At<int>(Logic(board), kLogicOffCurrentPlayer) & 1; }
 
@@ -522,7 +535,9 @@ DrawFn g_orig_board_draw;
 
 void __fastcall HookBoardDraw(void* board, void*, void* g)
 {
+    BoardDrawBegins(board);
     g_orig_board_draw(board, g);
+    BoardDrawEnds();
     if (board == g_duel.board && !Replaying(board))
         DrawAnnouncements(g);
 }
@@ -639,12 +654,13 @@ void AfterTick(void* board)
         return;
     bool replaying = game::At<uint8_t>(lm, kLogicOffReplaying) != 0;
     if (!replaying && st != last) {  // (an Instant Replay is a shot shown again)
-        bool turn = st == kAiming || st == kBallInPlay || st == kPegsClearing;
-        bool was_turn = last == kAiming || last == kBallInPlay || last == kPegsClearing;
+        bool turn = InTurn(st), was_turn = InTurn(last);
         if (turn && !was_turn)
             TurnStarted(board);
-        if ((st == kBallInPlay || st == kPegsClearing) && last == kAiming)
+        if ((st == kBallInPlay || st == kPegsClearing) && (last == kAiming || last == kZenShot))
             g_duel.shots |= 1 << CurrentPlayer(board);
+        if (st == kZenShot)
+            ++g_n_zen;
         if (st == kTurnPassing && was_turn && g_duel.running)
             TurnEnding(board);
         if (st == kOver || st == kSelection || st == kIntro)
@@ -706,11 +722,12 @@ uint32_t StateHash()
 
 std::string DebugState()
 {
-    char buf[600];
+    char buf[640];
+    void* lm = Logic(g_duel.board);
     snprintf(buf, sizeof buf,
              "on=%d running=%d round=%d shots=%d effect=%d (%s) ticks=%u announced=%d box=%d,%d,%d wanted=%d "
              "host=%d queue=%d rng=%08X red=%d redhit=%d victim=%d redeffect=%d redticks=%u redannounced=%d "
-             "redbox=%d,%d redwanted=%d hostred=%d player=%d",
+             "redbox=%d,%d redwanted=%d hostred=%d player=%d zen=%u zenleft=%d",
              g_duel.on ? 1 : 0, g_duel.running ? 1 : 0, g_duel.round, g_duel.shots, g_duel.effect,
              g_duel.effect == kNone ? "none" : kInfo[g_duel.effect].name, g_duel.effect_ticks,
              g_announced == kNone ? -1 : static_cast<int>(g_duel.effect_ticks * 10), g_box ? 1 : 0,
@@ -720,7 +737,8 @@ std::string DebugState()
              g_duel.red_hit ? 1 : 0, g_duel.red_victim, g_duel.red_effect, g_duel.red_ticks,
              g_red_announced == kNone ? -1 : static_cast<int>(g_duel.red_ticks * 10), g_red_box ? 1 : 0,
              g_red_box ? (ui::IsChecked(g_red_box) ? 1 : 0) : -1, RedWanted() ? 1 : 0, g_host_red ? 1 : 0,
-             g_duel.board && Logic(g_duel.board) ? CurrentPlayer(g_duel.board) : -1);
+             lm ? CurrentPlayer(g_duel.board) : -1, g_n_zen,
+             lm ? game::At<int>(lm, kLogicOffZenShots + 4 * CurrentPlayer(g_duel.board)) : -1);
     return buf;
 }
 
@@ -731,7 +749,10 @@ std::string DebugState()
 // into the second bucket (one computer only). chaos spooky: the next shot is a Spooky Ball, coming back once (with
 // or without an effect; one computer only). chaos rednext <effect>...: the red peg's effects to deal next. chaos
 // redat <x> <y> [tick] [round|brick|moving]: the red peg is the blue peg (of that kind) nearest that point from that
-// tick on, as if none had been hit.
+// tick on, as if none had been hit. chaos zen [n]: the player in turn has n Zen Balls to come (1; 0: none), as Master
+// Hu's power gives them (one computer only). chaos power <power> [turns] [player]: the player in turn (or that one:
+// 0, 1) has that master's power (the game's number) for that many turns (1; 0: off), from now on (one computer only).
+// chaos ballat <x> <y> <vx> <vy>: the next ball to move is put there (screen), at that speed (one computer only).
 std::string DebugCommand(const std::string& args)
 {
     std::istringstream in(args);
@@ -774,6 +795,29 @@ std::string DebugCommand(const std::string& args)
         DebugSpooky();
         return "ok";
     }
+    if (sub == "zen") {
+        void* lm = Logic(g_duel.board);
+        if (!lm)
+            return "error: no duel";
+        int n;
+        if (!(in >> n))
+            n = 1;
+        game::At<int>(lm, kLogicOffZenShots + 4 * CurrentPlayer(g_duel.board)) = n;
+        return "ok";
+    }
+    if (sub == "ballat") {
+        float x = 0, y = 0, vx = 0, vy = 0;
+        in >> x >> y >> vx >> vy;
+        DebugPlaceBall(x, y, vx, vy);
+        return "ok";
+    }
+    if (sub == "power") {
+        int power, turns = 1, player = -1;
+        if (!(in >> power))
+            return "error: chaos power <power> [turns] [player]";
+        in >> turns >> player;
+        return DebugPower(g_duel.board, power, turns, player) ? "ok" : "error: no duel, or no such power";
+    }
     if (sub == "bombat") {
         g_bomb_x = g_bomb_y = 0;
         g_bomb_tick = 0;
@@ -812,7 +856,8 @@ std::string DebugCommand(const std::string& args)
             out += std::to_string(i) + "=" + kInfo[i].name + (i + 1 < kEffectCount ? ", " : "");
         return out;
     }
-    return "error: chaos [next <effects>|now <effect>|rednext <effects>|redat <x> <y>|box|redbox|names]";
+    return "error: chaos [next <effects>|now <effect>|rednext <effects>|redat <x> <y>|box|redbox|names|zen [n]|"
+           "power <power> [turns] [player]|ballat <x> <y> <vx> <vy>]";
 }
 
 }  // namespace chaos

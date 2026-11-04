@@ -9,6 +9,12 @@ cl /nologo /std:c++17 /O2 /MT /EHsc /W3 /GS /Zi /DWIN32_LEAN_AND_MEAN /DNOMINMAX
    /link /DLL /OUT:build\bass.dll /PDB:build\bass.pdb /DEBUG /OPT:REF ^
    user32.lib gdi32.lib ws2_32.lib iphlpapi.lib dxguid.lib advapi32.lib
 if errorlevel 1 exit /b 1
+rem A float kept in an xmm register across a call into the game comes back as garbage: see tools\xmmcheck.py.
+where python >nul 2>nul
+if not errorlevel 1 (
+    python tools\xmmcheck.py build\bass.dll
+    if errorlevel 1 exit /b 1
+)
 if /i not "%1"=="install" exit /b 0
 rem Keep the genuine BASS (92,216 bytes) as bass_orig.dll the first time, never a copy of the mod.
 if not exist "..\bass_orig.dll" (

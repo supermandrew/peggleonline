@@ -104,7 +104,7 @@ void SetColor(void* g, const Color& c)
     reinterpret_cast<void(__thiscall*)(void*, const Color*)>(kGraphicsSetColor)(g, &c);
 }
 
-void SetFont(void* g, void* font)
+GAME_CALL void SetFont(void* g, void* font)
 {
     __asm {
         mov eax, g
@@ -114,7 +114,7 @@ void SetFont(void* g, void* font)
     }
 }
 
-void FillRect(void* g, int x, int y, int w, int h)
+GAME_CALL void FillRect(void* g, int x, int y, int w, int h)
 {
     __asm {
         push h
@@ -163,7 +163,7 @@ void* NewImageButton(int id, void* listener, void* image)
     return reinterpret_cast<void*(__cdecl*)(int, void*, void*, int)>(kNewImageButton)(id, listener, image, 0);
 }
 
-void* NewCheckbox(int id, void* listener, const char* label)
+GAME_CALL void* NewCheckbox(int id, void* listener, const char* label)
 {
     game::GameString text(label);  // copied into the checkbox
     void* box;
@@ -278,7 +278,7 @@ bool Shown(const void* widget)
     return true;
 }
 
-void* WidgetAt(int x, int y)
+GAME_CALL void* WidgetAt(int x, int y)
 {
     void* wm = WidgetManager();
     int lx = 0, ly = 0;
@@ -298,7 +298,7 @@ void* WidgetAt(int x, int y)
     return found;
 }
 
-void MouseMove(int x, int y)
+GAME_CALL void MouseMove(int x, int y)
 {
     void* wm = WidgetManager();
     __asm {
@@ -310,7 +310,7 @@ void MouseMove(int x, int y)
     }
 }
 
-void MouseDown(int x, int y, int clicks)
+GAME_CALL void MouseDown(int x, int y, int clicks)
 {
     LendFocus focus;
     void* wm = WidgetManager();
@@ -324,7 +324,7 @@ void MouseDown(int x, int y, int clicks)
     }
 }
 
-void MouseUp(int x, int y, int clicks)
+GAME_CALL void MouseUp(int x, int y, int clicks)
 {
     LendFocus focus;
     void* wm = WidgetManager();
@@ -340,7 +340,7 @@ void MouseUp(int x, int y, int clicks)
 
 void MouseWheel(void* widget, int delta) { VCall<void(__thiscall*)(void*, int)>(widget, kSlotMouseWheel)(widget, delta); }
 
-void KeyDown(int key)
+GAME_CALL void KeyDown(int key)
 {
     void* wm = WidgetManager();
     __asm {
@@ -351,7 +351,7 @@ void KeyDown(int key)
     }
 }
 
-void KeyUp(int key)
+GAME_CALL void KeyUp(int key)
 {
     void* wm = WidgetManager();
     __asm {
@@ -362,7 +362,7 @@ void KeyUp(int key)
     }
 }
 
-void KeyChar(char c)
+GAME_CALL void KeyChar(char c)
 {
     void* wm = WidgetManager();
     int code = static_cast<unsigned char>(c);

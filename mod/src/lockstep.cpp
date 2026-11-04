@@ -1251,7 +1251,7 @@ int CountTicks(const uint8_t* p, size_t n)
     return ticks;
 }
 
-float FadeProgress(void* board)
+GAME_CALL float FadeProgress(void* board)
 {
     void* curve = static_cast<char*>(board) + kBoardOffFadeIn;
     float result;
@@ -1266,7 +1266,7 @@ float FadeProgress(void* board)
     return result;
 }
 
-bool InTransitionList(void* board)
+GAME_CALL bool InTransitionList(void* board)
 {
     void* list = game::At<void*>(game::App(), kAppOffTransitionList);
     uint8_t listed = 0;

@@ -47,7 +47,7 @@ void* Logic(void* board) { return board ? game::At<void*>(board, kBoardOffLogic)
 
 int ShotCount(void* board) { return board ? game::At<int>(board, kBoardOffShotCount) : 0; }
 
-void* ShotCopy(void* board, int i)
+GAME_CALL void* ShotCopy(void* board, int i)
 {
     void* deque = static_cast<char*>(board) + kBoardOffShots;
     void** slot;

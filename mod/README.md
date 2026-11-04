@@ -40,6 +40,11 @@ mod\build.bat install    :: also copies it into the game folder, keeping the ori
 mod\package.bat          :: builds mod\dist\PeggleNightsOnline.zip for players
 ```
 
+With Python installed, the build ends with `tools\xmmcheck.py`, which fails it if the compiled code keeps a float in an
+xmm register across a call into the game. The compiler assumes an `__asm` block leaves those registers alone, but the
+game's code may change them, so a function whose `__asm` calls the game is `GAME_CALL` (never inlined) and assembly
+inside a bigger function goes into one of those.
+
 Runtime files go to `mods\` in the game folder: `netplay.ini` (last address, `port=`, the controller settings in
 `[controller]`, `[display] borderless=`, `[duel] chaos=` and `red=`), `logs\netplay-<pid>.log`.
 
@@ -70,8 +75,11 @@ python mod\tools\duo.py chaos      :: Chaos Mode in a local duel on A: the box, 
 python mod\tools\duo.py chaosonline :: A hosts, B joins: online Chaos Mode through all 16 effects (after start)
 python mod\tools\duo.py chaosfull  :: start, then chaos (chaosonlinefull: start, then chaosonline)
 python mod\tools\duo.py chaosreplay :: Instant Replay of a shot under each Chaos Mode effect (after start; or some: 2 13)
+python mod\tools\duo.py chaoszen   :: just the rounds and a Zen Ball's shot counting as one (after start)
+python mod	ools\duo.py chaospowers :: just masters' powers at the bucket with its effects (after start)
 python mod\tools\duo.py redpeg     :: Red Peg Mode in a local duel on A: the box, each red peg effect, with Chaos Mode,
-                                   :: bricks and moving pegs (Eiffel Power)
+                                   :: bricks and moving pegs (Eiffel Power), a brick turning round a flower (The Guardians)
+python mod\tools\duo.py redturning :: just the turning red brick, drawn red in every frame (after start)
 python mod\tools\duo.py redpegonline :: A hosts, B joins: an online Red Peg Mode duel (after start)
 python mod\tools\duo.py redpegfull :: start, then redpeg (redpegonlinefull: start, then redpegonline)
 python mod\tools\duo.py finish     :: close both copies, debug mode off
@@ -91,13 +99,20 @@ still running every frame with the Menu over the paused board, swapping the cont
 controller playing both players.
 
 `chaos` ticks and unticks the CHAOS MODE box (netplay.ini remembers it), plays both players' first shots (no effect)
-and two rounds (a new, announced effect each), then has every effect in turn (the pipe's `chaos hold` keeps it through
+and two rounds (a new, announced effect each), a Zen Ball's shot (`chaos zen` gives the player in turn one, as Master
+Hu's power does: the game chooses the shot in a state of its own) counting as that player's shot of the round, with
+Double Shot splitting it (its other shots are aimed: `chaos zen 0` takes away a Zen Ball the power gave), then has
+every effect in turn (the pipe's `chaos hold` keeps it through
 the rounds, `chaos now <n>` switches) and checks what it does: the ball's size, kicks off pegs, a ball caught in the
 second bucket (`chaos dropin`), the bucket's jumps, the purple pegs, the shuffle, the pegs gone from the picture, the
 guide left out, the second ball, the portals, the ball coming round from the other side, the bomb going off (`chaos
 bombat <x> <y>` makes the peg nearest that point the bomb), the board dark, the ball falling up, the slow motion, and
 everything back to normal afterwards. It also makes a shot a Spooky Ball (`chaos spooky` arms the next one): with gravity as
-usual it comes back at the top on its way down, upside down at the bottom on its way up. `chaos fx` reports what the effects did. `chaosonline` checks that the joiner's
+usual it comes back at the top on its way down, upside down at the bottom on its way up. `chaos fx` reports what the effects did.
+
+`chaospowers` (part of `chaos` too) checks masters' powers at the bucket with the bucket's effects. `chaos power <n> [turns] [player]` gives a player a power by the game's number as a turn would (2 Flippers, 4 Pyramid, 12 Fireball, 14 Chain Lightning), and `chaos ballat <x> <y> <vx> <vy>` puts the ball in play there. Claude's flippers go to the top upside down, mirrored, swing down and bat a ball down, and come back. Double Bucket keeps half the track over the turns, half the flippers' narrower one too. The second bucket bounces a ball off its rim and catches one off its middle, and a fireball knocks its lid off. Chain Lightning's arc goes to the nearer bucket, and upside down to the rod under the bucket. A rising ball bounces off the pyramid's side upside down, and the bucket catches upside down.
+
+`chaosonline` checks that the joiner's
 box shows the host's, queues the 16 effects in order on both copies (`chaos next ...`) and plays duels one after
 another (Replay Level) until all have come up, comparing the two pictures pixel by pixel at the same tick with each
 effect, and sets the bomb off on both (`chaos bombat <x> <y> <tick>` moves it inside the game's ticks, at the same

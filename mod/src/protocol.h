@@ -4,7 +4,7 @@
 
 namespace proto {
 
-constexpr uint32_t kVersion = 8;
+constexpr uint32_t kVersion = 10;
 
 enum Type : uint8_t {
     kHello = 1,    // Hello

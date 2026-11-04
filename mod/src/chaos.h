@@ -60,5 +60,6 @@ void SetRandomState(uint32_t s);
 uint32_t StateHash();  // what both computers' modes must agree on
 std::string DebugState();
 std::string DebugCommand(const std::string& args);  // testing: force effects
+std::string DebugObjects(const std::string& id);    // testing: the board's objects (chaos_effects.cpp)
 
 }  // namespace chaos

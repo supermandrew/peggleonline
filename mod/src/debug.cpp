@@ -270,23 +270,38 @@ std::string RunCommand(const std::string& line, std::function<void()>& later)
         PretendCursor(wnd, x, y);
         return "ok";
     }
-    if (cmd == "peek") {  // peek <app|wm|board|dd> <hex offset> [count]: ints from a game object, for reverse engineering
+    // peek <app|wm|board|dd|profile|0x address> <hex offset> [count]: ints from a game object, for reverse
+    // engineering (peekf: floats)
+    if (cmd == "peek" || cmd == "peekf") {
         std::string base;
         int off = 0, count = 1;
         in >> base >> std::hex >> off >> std::dec >> count;
         void* app = game::App();
-        void* p = !app ? nullptr
+        void* p = base.rfind("0x", 0) == 0 ? reinterpret_cast<void*>(strtoul(base.c_str(), nullptr, 16))
+                : !app ? nullptr
                 : base == "app" ? app
                 : base == "wm" ? ui::WidgetManager()
                 : base == "board" ? game::At<void*>(app, game::kAppOffBoard)
                 : base == "dd" ? game::At<void*>(app, game::kAppOffDDInterface)
+                : base == "profile" ? game::At<void*>(app, game::kAppOffProfile)
                 : nullptr;
         if (!p)
             return "error: no " + base;
         std::string out;
-        for (int i = 0; i < count && i < 64; ++i)
-            out += (i ? " " : "") + std::to_string(game::At<int>(p, off + 4 * i));
+        char num[32];
+        for (int i = 0; i < count && i < 64; ++i) {
+            if (cmd == "peekf")
+                snprintf(num, sizeof num, "%g", game::At<float>(p, off + 4 * i));
+            else
+                snprintf(num, sizeof num, "%d", game::At<int>(p, off + 4 * i));
+            out += (i ? " " : "") + std::string(num);
+        }
         return out;
+    }
+    if (cmd == "objs") {  // objs [id]: the board's objects but pegs, or those with that id from the level
+        std::string id;
+        in >> id;
+        return chaos::DebugObjects(id);
     }
     if (cmd == "board") {  // the board in play, online or not: logic state, whose turn, logic steps run so far
         void* board = game::App() ? game::At<void*>(game::App(), game::kAppOffBoard) : nullptr;
