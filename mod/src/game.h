@@ -74,6 +74,7 @@ enum ButtonMode { kButtonsNone = 0, kButtonsYesNo = 1, kButtonsOkCancel = 2, kBu
 constexpr int kEditDialogSize = 0x184;
 constexpr int kEditDialogOffEdit = 0x17C;        // EditWidget*
 constexpr int kEditOffText = 0x8C;               // std::string
+constexpr int kEditOffWidthChecks = 0xCC;        // std::list head: nodes of next, prev, Font*, max pixels (0: none)
 constexpr int kEditOffMaxChars = 0xF0;
 constexpr int kEditSlotSetText = 73;             // SetText(const std::string&, bool cursorToEnd)
 

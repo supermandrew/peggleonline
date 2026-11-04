@@ -185,7 +185,7 @@ void TextEntry(int id, const char* header, const std::string& initial)
     void* edit = game::At<void*>(dlg, game::kEditDialogOffEdit);
     game::GameString text(initial.c_str());
     VCall<void(__thiscall*)(void*, game::GameString*, int)>(edit, game::kEditSlotSetText)(edit, &text, 1);
-    int w = 350;
+    int w = 460;  // room for a whole IPv4 address and port
     int h = VCall<int(__thiscall*)(void*, int)>(dlg, game::kDialogSlotPreferredHeight)(dlg, w);
     Resize(dlg, 400 - w / 2, 300 - h / 2, w, h);
     game::ShowDialogAnimated(dlg, true);

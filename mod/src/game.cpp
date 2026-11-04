@@ -115,6 +115,10 @@ GAME_CALL void* NewEditDialog(int id, const char* header)
         call eax
     }
     At<int>(edit, kEditOffMaxChars) = 40;
+    // The style also limits the text to 190 pixels of its font, too few for an IPv4 address.
+    void** head = At<void**>(edit, kEditOffWidthChecks);
+    for (void** node = static_cast<void**>(*head); node != head; node = static_cast<void**>(*node))
+        reinterpret_cast<int*>(node)[3] = 0;
     return dlg;
 }
 
