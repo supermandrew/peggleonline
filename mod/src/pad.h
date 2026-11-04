@@ -1,5 +1,6 @@
 #pragma once
-// The controllers, through XInput: Xbox controllers, and anything Steam, DSX or DS4Windows presents as one.
+// The controllers: through XInput Xbox controllers, and anything Steam, DSX or DS4Windows presents as one; failing
+// that DualShock 4s and DualSenses directly (padhid.h).
 // Read once per frame while the game's window is in front. Every connected controller counts as the same one,
 // except where a local duel gives each player their own (Select).
 // Tests drive pretend controllers through the debug pipe instead.

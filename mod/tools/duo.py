@@ -20,6 +20,8 @@ windows have focus and wherever the real mouse is.
                                  Online, the address on the on-screen keyboard, masters, aiming and shooting with the
                                  sticks, chat, the Menu, the results, leaving
   python duo.py padfull          start, pad
+  python duo.py padreports       PlayStation controllers' HID reports in every form (DualShock 4, DualSense; USB,
+                                 Bluetooth): each button, the d-pad, sticks, triggers (after start; also in pad)
   python duo.py local            copy A: a saved replay from Replays, then a local duel with two (pretend)
                                  controllers: each player's own highlight on the selection, each turn played only by
                                  its player's controller (aim, fast-forward, shoot, vibration), Instant Replay's
@@ -868,8 +870,66 @@ def pad_leave(k):
     ok(f'controller: copy {k} left the duel')
 
 
+def pad_reports(k='A'):
+    """What PlayStation controllers' HID reports say, in every form they come in (`hidreport` hands the mod a report):
+    DualShock 4 and DualSense, over USB and in both Bluetooth forms: each button, the d-pad, the sticks and the
+    triggers; reports that aren't a controller's state say nothing. Then whatever is really connected: read, and at
+    rest (no phantom presses)."""
+    bits = dict(cross=1 << 0, circle=1 << 1, square=1 << 2, triangle=1 << 3, l1=1 << 4, r1=1 << 5, share=1 << 8,
+                options=1 << 9, l3=1 << 10, r3=1 << 11)
+    up, down, left, right = 1 << 12, 1 << 13, 1 << 14, 1 << 15
+    hats = [up, up | right, right, down | right, down, down | left, left, up | left, 0]
+    faces = dict(square=0x10, cross=0x20, circle=0x40, triangle=0x80)
+    others = dict(l1=0x01, r1=0x02, share=0x10, options=0x20, l3=0x40, r3=0x80)
+
+    def short(s, b, t):                                      # sticks, buttons, a counter, then the triggers
+        return [*s, *b, 0, *t]
+
+    def full(s, b, t):                                       # sticks, the triggers, a counter, then the buttons
+        return [*s, *t, 0x55, *b, 0]
+
+    forms = [('DualShock 4 USB', 'ds4', 64, [0x01], short), ('DualShock 4 Bluetooth', 'ds4', 547, [0x11, 0xC0, 0], short),
+             ('DualShock 4 Bluetooth short', 'ds4', 547, [0x01], short), ('DualSense USB', 'ds5', 64, [0x01], full),
+             ('DualSense Bluetooth', 'ds5', 78, [0x31, 0x10], full), ('DualSense Bluetooth short', 'ds5', 78, [0x01], short)]
+
+    def say(kind, length, report):
+        return send(k, f"hidreport {kind} {length} {bytes(report + [0] * (64 - len(report))).hex()}")
+
+    for name, kind, length, head, body in forms:
+        def check(sticks, buttons, triggers, want_bits, what):
+            got = say(kind, length, head + body(sticks, buttons, triggers))
+            want = (f'buttons={want_bits:X} sticks={",".join(map(str, sticks))} '
+                    f'triggers={",".join(map(str, triggers))}')
+            if got != want:
+                raise StepFailed(f'{name}, {what}: {got}, not {want}')
+
+        rest = (128, 127, 126, 129)
+        check(rest, (0x08, 0), (0, 0), 0, 'at rest')
+        check((1, 2, 3, 4), (0x08, 0), (200, 90), 0, 'sticks and triggers')
+        for i, hat in enumerate(hats):
+            check(rest, (i, 0), (0, 0), hat, f'd-pad {i}')
+        for button, mask in faces.items():
+            check(rest, (0x08 | mask, 0), (0, 0), bits[button], button)
+        for button, mask in others.items():
+            check(rest, (0x08, mask), (0, 0), bits[button], button)
+        check(rest, (0x08 | 0x20, 0x02), (0, 0), bits['cross'] | bits['r1'], 'two at once')
+    ok('PlayStation controllers: every report form says each button, the d-pad, sticks and triggers')
+    for what, kind, report in (('a state marked as having no input', 'ds4', [0x11, 0x00, 0] + [128] * 9),
+                               ('a report of another kind', 'ds5', [0x05, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]),
+                               ('a wireless adapter with no controller', 'ds4', [0x01])):
+        got = say(kind, 64, report)
+        if got != 'none':
+            raise StepFailed(f'{what} should say nothing: {got}')
+    real = dict(kv.split('=', 1) for kv in send(k, 'padstate').split() if '=' in kv)
+    if real.get('test') == '0' and real.get('count') != '0':
+        if real.get('down') != '0' or real.get('inuse') != '0':
+            raise StepFailed(f'a real controller at rest should press nothing: {real}')
+        ok(f"a real controller is connected, at rest: {send(k, 'padstate').split('hid:')[-1].split(' options_button')[0].strip()}")
+
+
 def padscenario():
     rnd = random.Random(5)
+    pad_reports()
     pad_menus()
     pad_connect()
     pad_level()
@@ -3101,6 +3161,8 @@ def main(argv):
             ok('full scenario passed')
         elif cmd == 'pad':
             padscenario()
+        elif cmd == 'padreports':
+            pad_reports()
         elif cmd == 'padfull':
             start()
             padscenario()

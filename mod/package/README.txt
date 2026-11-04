@@ -107,9 +107,11 @@ Windows would.
 CONTROLLER
 ----------
 Plug in a controller and use it any time; the mouse pointer hides while you do, and comes back when
-you move the mouse. Xbox controllers work as they are. A PlayStation or other controller needs to
-look like an Xbox one to the game: Steam Input does that (Steam's controller settings), or a tool
-such as DS4Windows or DSX.
+you move the mouse. Xbox controllers and PS4 and PS5 controllers (USB or Bluetooth) work as they
+are, and so do tools that show one as the other, such as Steam Input, DS4Windows or DSX. Any other
+controller needs to look like an Xbox one to the game: those tools can do that too. If a tool shows
+a PlayStation controller as an Xbox one, the game uses the Xbox one and leaves the original alone,
+so one person never counts as two players.
 
   Left stick / D-pad   menus: move between buttons     game: aim (D-pad: one small step)
   Right stick          game: fine aim

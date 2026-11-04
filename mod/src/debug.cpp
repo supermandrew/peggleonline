@@ -21,6 +21,7 @@
 #include "log.h"
 #include "online.h"
 #include "pad.h"
+#include "padhid.h"
 #include "padmenu.h"
 #include "replays.h"
 #include "ui.h"
@@ -201,6 +202,27 @@ std::string RunCommand(const std::string& line, std::function<void()>& later)
             start = end + 1;
         }
         pad::SetTestState(controller, bits, lx, ly, rx, ry);
+        return "ok";
+    }
+    if (cmd == "hidreport") {  // hidreport <ds4|ds5> <input report length> <hex>: what a controller's report says
+        std::string kind, hex;
+        size_t length = 0;
+        in >> kind >> length >> hex;
+        std::vector<uint8_t> report;
+        for (size_t i = 0; i + 1 < hex.size(); i += 2)
+            report.push_back(static_cast<uint8_t>(strtoul(hex.substr(i, 2).c_str(), nullptr, 16)));
+        padhid::State s;
+        if (report.empty() || !padhid::ParseReport(report.data(), report.size(), kind == "ds5", length, s))
+            return "none";
+        char buf[80];
+        snprintf(buf, sizeof buf, "buttons=%X sticks=%d,%d,%d,%d triggers=%d,%d", s.buttons, s.lx, s.ly, s.rx, s.ry,
+                 s.l2, s.r2);
+        return buf;
+    }
+    if (cmd == "hidmotors") {  // hidmotors <controller> <heavy> <light>: a PlayStation controller's motors, 0..255
+        int controller = 0, heavy = 0, light = 0;
+        in >> controller >> heavy >> light;
+        padhid::SetMotors(controller, static_cast<uint8_t>(heavy), static_cast<uint8_t>(light));
         return "ok";
     }
     if (cmd == "padstate")

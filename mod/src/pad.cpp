@@ -11,6 +11,7 @@
 #include "config.h"
 #include "game.h"
 #include "log.h"
+#include "padhid.h"
 
 namespace pad {
 
@@ -21,6 +22,7 @@ constexpr float kLeftDeadZone = XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE / 32767.0f;
 constexpr float kRightDeadZone = XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE / 32767.0f;
 constexpr BYTE kTriggerDown = 128;  // a trigger counts as pressed past half way
 constexpr DWORD kRescanMs = 2000;   // asking XInput about an empty slot is slow
+constexpr int kSlots = XUSER_MAX_COUNT + padhid::kMax;  // XInput's four, then PlayStation controllers read directly
 constexpr int kMouseSlack = 3;      // pixels the mouse may drift before it counts as moved
 constexpr float kInUseStick = 0.3f;
 
@@ -83,9 +85,9 @@ struct Controller {
     uint32_t down, prev;  // buttons this frame and the last
     Stick left, right;
 };
-Controller g_pads[XUSER_MAX_COUNT];  // by XInput slot (testing: the pretend ones)
+Controller g_pads[kSlots];  // by slot (testing: the pretend ones)
 DWORD g_last_scan[XUSER_MAX_COUNT];
-int g_order[XUSER_MAX_COUNT];  // the slots of the connected controllers, in order
+int g_order[kSlots];  // the slots of the connected controllers, in order
 int g_count;
 int g_selected = kEveryone;
 const Controller kNoController = {};
@@ -98,7 +100,7 @@ bool g_in_use;
 POINT g_mouse_at_use;  // where the pointer was when the controller took over
 
 bool g_test;
-Controller g_test_pads[XUSER_MAX_COUNT];  // as the test pipe last set them
+Controller g_test_pads[kSlots];  // as the test pipe last set them
 
 struct Effect {
     float low, high;
@@ -107,7 +109,7 @@ struct Effect {
     uint32_t slots;  // the controllers it shakes
 };
 Effect g_effects[8];
-WORD g_motors[XUSER_MAX_COUNT][2];  // heavy and light motor, as each controller was last told
+WORD g_motors[kSlots][2];  // heavy and light motor, as each controller was last told
 int g_sound_target = kEveryone;
 std::string g_last_rumble = "none";
 int g_last_rumble_target = kEveryone;
@@ -132,7 +134,7 @@ void Load()
             return;
         }
     }
-    Log("pad: no XInput on this computer; controllers won't work");
+    Log("pad: no XInput on this computer; only PlayStation controllers will work");
 }
 
 bool GameInFront()
@@ -140,6 +142,8 @@ bool GameInFront()
     void* app = game::App();
     return app && GetForegroundWindow() == game::At<HWND>(app, kAppOffHwnd);
 }
+
+SHORT Axis(uint8_t v) { return static_cast<SHORT>((v - 127.5f) / 127.5f * 32767); }  // a HID report's 0..255
 
 Stick DeadZone(SHORT x, SHORT y, float zone)
 {
@@ -184,6 +188,34 @@ void ReadControllers()
         c.left = DeadZone(gp.sThumbLX, gp.sThumbLY, kLeftDeadZone);
         c.right = DeadZone(gp.sThumbRX, gp.sThumbRY, kRightDeadZone);
     }
+    // PlayStation controllers, read directly, only while XInput has none: an Xbox controller there is usually one of
+    // them seen twice (DSX, Steam Input and DS4Windows all make one), and one person would be two players.
+    bool xinput = false;
+    for (int i = 0; i < XUSER_MAX_COUNT; ++i)
+        xinput |= g_pads[i].connected;
+    padhid::Update(!xinput);
+    for (int i = 0; i < padhid::kMax; ++i) {
+        int slot = XUSER_MAX_COUNT + i;
+        Controller& c = g_pads[slot];
+        padhid::State st;
+        bool was = c.connected;
+        c.connected = !xinput && padhid::Get(i, st);
+        c.down = 0;
+        c.left = c.right = {0, 0};
+        if (c.connected != was)
+            Log("pad: PlayStation controller %d %s", i + 1, c.connected ? "connected" : "disconnected");
+        if (!c.connected) {
+            g_motors[slot][0] = g_motors[slot][1] = 0;
+            continue;
+        }
+        c.down = st.buttons;
+        if (st.l2 >= kTriggerDown)
+            c.down |= 1u << kLT;
+        if (st.r2 >= kTriggerDown)
+            c.down |= 1u << kRT;
+        c.left = DeadZone(Axis(st.lx), Axis(255 - st.ly), kLeftDeadZone);
+        c.right = DeadZone(Axis(st.rx), Axis(255 - st.ry), kRightDeadZone);
+    }
 }
 
 const Controller* Chosen()  // null: every controller together
@@ -196,7 +228,7 @@ const Controller* Chosen()  // null: every controller together
 uint32_t Slots(int controller)
 {
     if (controller == kEveryone)
-        return (1u << XUSER_MAX_COUNT) - 1;
+        return (1u << kSlots) - 1;
     return controller >= 0 && controller < g_count ? 1u << g_order[controller] : 0;
 }
 
@@ -207,16 +239,20 @@ void SetMotors(int slot, float low, float high)
         return;
     g_motors[slot][0] = l;
     g_motors[slot][1] = h;
-    if (g_test || !g_set_state)
+    if (g_test)
         return;
-    XINPUT_VIBRATION v = {l, h};
-    g_set_state(slot, &v);
+    if (slot >= XUSER_MAX_COUNT) {
+        padhid::SetMotors(slot - XUSER_MAX_COUNT, static_cast<uint8_t>(l >> 8), static_cast<uint8_t>(h >> 8));
+    } else if (g_set_state) {
+        XINPUT_VIBRATION v = {l, h};
+        g_set_state(slot, &v);
+    }
 }
 
 void UpdateRumble()
 {
     DWORD now = GetTickCount();
-    float low[XUSER_MAX_COUNT] = {}, high[XUSER_MAX_COUNT] = {};
+    float low[kSlots] = {}, high[kSlots] = {};
     for (Effect& e : g_effects) {
         if (e.ms <= 0)
             continue;
@@ -226,7 +262,7 @@ void UpdateRumble()
             continue;
         }
         float fade = std::min(1.0f, (e.ms - age) / (0.4f * e.ms));  // full strength, then the last 40% fades
-        for (int i = 0; i < XUSER_MAX_COUNT; ++i) {
+        for (int i = 0; i < kSlots; ++i) {
             if (e.slots & (1u << i)) {
                 low[i] = std::max(low[i], e.low * fade);
                 high[i] = std::max(high[i], e.high * fade);
@@ -234,7 +270,7 @@ void UpdateRumble()
         }
     }
     bool allowed = g_in_use && config::PadVibration() && (g_test || GameInFront());
-    for (int i = 0; i < XUSER_MAX_COUNT; ++i)
+    for (int i = 0; i < kSlots; ++i)
         SetMotors(i, allowed ? low[i] : 0, allowed ? high[i] : 0);
 }
 
@@ -257,7 +293,7 @@ void Update()
         c.prev = c.down;
     g_all_prev = g_all_down;
     if (g_test) {
-        for (int i = 0; i < XUSER_MAX_COUNT; ++i) {
+        for (int i = 0; i < kSlots; ++i) {
             uint32_t prev = g_pads[i].prev;
             g_pads[i] = g_test_pads[i];
             g_pads[i].prev = prev;
@@ -275,7 +311,7 @@ void Update()
     g_all_down = 0;
     g_all_left = g_all_right = {0, 0};
     bool input = false;
-    for (int i = 0; i < XUSER_MAX_COUNT; ++i) {
+    for (int i = 0; i < kSlots; ++i) {
         const Controller& c = g_pads[i];
         if (!c.connected)
             continue;
@@ -383,13 +419,14 @@ void SetTestState(int controller, uint32_t buttons, float lx, float ly, float rx
         return;
     if (!g_test) {
         Log("pad: test controllers on");
-        for (int i = 0; i < XUSER_MAX_COUNT; ++i) {
-            if (g_pads[i].connected && g_set_state && (g_motors[i][0] || g_motors[i][1])) {
+        for (int i = 0; i < kSlots; ++i) {
+            if (i < XUSER_MAX_COUNT && g_pads[i].connected && g_set_state && (g_motors[i][0] || g_motors[i][1])) {
                 XINPUT_VIBRATION still = {0, 0};  // a real one mustn't go on shaking
                 g_set_state(i, &still);
             }
             g_test_pads[i] = {i == 0};  // the first one is always there
         }
+        padhid::Update(false);
         memset(g_motors, 0, sizeof g_motors);
     }
     g_test = true;
@@ -408,10 +445,10 @@ void EndTest()
         Log("pad: test controllers off");
     g_test = false;
     g_in_use = false;
-    for (int i = 0; i < XUSER_MAX_COUNT; ++i) {
-        g_pads[i] = {};
-        g_last_scan[i] = 0;  // look for real ones again straight away
-    }
+    for (Controller& c : g_pads)
+        c = {};
+    for (DWORD& scan : g_last_scan)
+        scan = 0;  // look for real ones again straight away
     memset(g_motors, 0, sizeof g_motors);
     g_all_down = g_all_prev = 0;
     g_all_left = g_all_right = {0, 0};
@@ -428,7 +465,7 @@ std::string DebugState()
              "rumbleto=%d",
              g_count > 0 ? 1 : 0, g_count, g_in_use ? 1 : 0, g_test ? 1 : 0, g_all_down, motor(0, 0), motor(0, 1),
              motor(1, 0), motor(1, 1), g_rumbles, g_last_rumble.c_str(), g_last_rumble_target);
-    return buf;
+    return buf + (" " + padhid::DebugState());
 }
 
 }  // namespace pad

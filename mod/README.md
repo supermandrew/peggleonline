@@ -18,7 +18,8 @@ documented in [../re/NOTES.md](../re/NOTES.md).
 | `src/chaos.cpp` | Chaos Mode and Red Peg Mode: their boxes on the Two Player Selection, the rounds, the red peg's hit and whose turn gets its effect, which effect comes next, the announcements |
 | `src/chaos_effects.cpp` | The effects (Chaos Mode's 16, the red peg's Mirage and Silhouette) and the red peg: hooks into the game's pegs, balls, physics, bucket, cannon and drawing, recolored copies of the peg pictures, Mirage's blackout, the effects' state of a shot for its replay |
 | `src/replays.cpp` | Instant Replay with the modes: the effects' state of each recorded shot, put in place while its replay plays; saved replay files carrying it; online, SAVE in Instant Replay's place |
-| `src/pad.cpp` | The controllers (XInput), together or one at a time, whether they or the mouse are in use, vibration from the game's sounds |
+| `src/pad.cpp` | The controllers (XInput, and `padhid` while XInput has none), together or one at a time, whether they or the mouse are in use, vibration from the game's sounds |
+| `src/padhid.cpp` | DualShock 4s and DualSenses read straight from their HID reports (USB and Bluetooth), found on a thread of their own, and their motors |
 | `src/controls.cpp` | What the controller does: moves between and presses buttons on every screen, aims and shoots on the board, chat, Instant Replay; a local duel with a controller per player |
 | `src/keyboard.cpp` | On-screen keyboard for text boxes |
 | `src/padmenu.cpp` | CONTROLLER in the Options dialog: button mapping, vibration, aim speed, which controller plays which player |
@@ -67,6 +68,7 @@ python mod\tools\duo.py scenario   :: chat, duel to results (chat), replay level
 python mod\tools\duo.py full       :: all of the above, plus a local duel on A first
 python mod\tools\duo.py pad        :: the online duel again with a controller only (after start)
 python mod\tools\duo.py padfull    :: start, then pad
+python mod\tools\duo.py padreports :: PlayStation controllers' HID reports in every form (after start; also in pad)
 python mod\tools\duo.py local      :: a local duel on A with two controllers (after start)
 python mod\tools\duo.py localfull  :: start, then local
 python mod\tools\duo.py display    :: A's window and BORDERLESS, on the smallest monitor (after start)

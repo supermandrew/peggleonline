@@ -11,8 +11,8 @@ ways to play:
   Silhouette!, Blind Shot! or Lights Out!.
 - **Instant Replay** keeps the effects in Chaos and Red Peg duels. Online, its button becomes SAVE, which saves the
   last shot as a replay.
-- **Controller Support**: menus and the actual game are now playable with an Xbox-style controller (a PlayStation one through Steam Input or a
-  tool like DS4Windows), with remapping and vibration, and one controller per player in a local duel.
+- **Controller Support**: menus and the actual game are now playable with an Xbox, PS4 or PS5 controller, with
+  remapping and vibration, and one controller per player in a local duel.
 - **Borderless full screen**, and a sharper picture in a window on scaled displays.
 
 Chaos Mode, Red Peg Mode and controller support work in local duels too.
