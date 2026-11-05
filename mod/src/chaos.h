@@ -53,6 +53,11 @@ void AfterTick(void* board);
 // The board was loaded from a copy (an Instant Replay began or ended): no turn began or ended by it.
 void BoardReloaded(void* board);
 
+// All these modes hold beside the board, and putting it back once the board has been loaded from a copy: both
+// games taking one board when they're found to differ (lockstep.cpp).
+std::string SaveState(void* board);
+void LoadState(void* board, const std::string& saved);
+
 // The effects' random numbers (an Instant Replay plays a shot with the ones it had).
 uint32_t RandomState();
 void SetRandomState(uint32_t s);

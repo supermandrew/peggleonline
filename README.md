@@ -21,7 +21,8 @@ Chaos Mode, Red Peg Mode and controller support work in local duels too.
 
 - Peggle Nights from Steam, on Windows. The mod works with that exact version of the game: on any other it stays off
   and the game runs as usual.
-- For online play, both players need the same version of the mod.
+- For online play, both players need the same version of the mod. If the host picks a level from a level pack the
+  other player doesn't have, the game asks them whether they want it and sends it over.
 
 ## Install
 

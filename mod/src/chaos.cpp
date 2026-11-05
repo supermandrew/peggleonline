@@ -606,6 +606,28 @@ void BoardReloaded(void* board)
         g_duel.last_state = game::At<int>(lm, kLogicOffState);  // (no turn begins or ends by a reload)
 }
 
+std::string SaveState(void* board)
+{
+    ShotState shot;
+    CaptureShot(board, shot);
+    std::string saved(reinterpret_cast<const char*>(&shot), sizeof shot);
+    saved.append(reinterpret_cast<const char*>(&g_duel), sizeof g_duel);
+    return saved;
+}
+
+void LoadState(void* board, const std::string& saved)
+{
+    if (saved.size() != sizeof(ShotState) + sizeof(Duel))
+        return;
+    ShotState shot;
+    memcpy(&shot, saved.data(), sizeof shot);
+    memcpy(&g_duel, saved.data() + sizeof shot, sizeof g_duel);
+    g_duel.board = board;
+    g_next = NextTurn();
+    ApplyShot(board, shot);
+    BoardReloaded(board);
+}
+
 uint32_t RandomState() { return g_rng; }
 void SetRandomState(uint32_t s) { g_rng = s ? s : 1; }
 

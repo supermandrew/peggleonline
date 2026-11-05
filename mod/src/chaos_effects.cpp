@@ -2266,18 +2266,36 @@ void* Tinted(void* from, int tint)
     return g_tinted.back().image;
 }
 
-// A brick's picture of a cell, made now if it hasn't been drawn in that color yet.
-GAME_CALL void* BrickImage(void* brick, int cell)
+GAME_CALL void MakeBrickImage(void* brick, int cell)
+{
+    __asm {
+        push cell
+        push brick
+        mov eax, kMakeBrickImage
+        call eax
+    }
+}
+
+// The game makes a brick's glow together with the picture of the color it glows in, once, and from then on takes
+// both as there. A glow made first by us, or a brick that has changed color since (a lit red peg reads as green),
+// would have it look for a picture that was never made.
+void CompleteBrickImages(void* brick)
 {
     void** images = &F<void*>(brick, kBrickOffImages);
-    if (!images[cell]) {
-        __asm {
-            push cell
-            push brick
-            mov eax, kMakeBrickImage
-            call eax
-        }
-    }
+    if (!images[kBrickGlowCell])
+        return;
+    for (int cell = 1; cell <= 4; ++cell)
+        if (!images[cell])
+            MakeBrickImage(brick, cell);
+}
+
+// A brick's picture of a cell, made now if it hasn't been drawn in that color yet.
+void* BrickImage(void* brick, int cell)
+{
+    void** images = &F<void*>(brick, kBrickOffImages);
+    if (!images[cell])
+        MakeBrickImage(brick, cell);
+    CompleteBrickImages(brick);
     return images[cell];
 }
 
@@ -2489,6 +2507,8 @@ void __fastcall BallDraw(void* obj, void*, void* g)
 template <int Part>
 void __fastcall BrickDraw(void* obj, void*, void* g)
 {
+    if (Part == 1 && PegInfo(obj))
+        CompleteBrickImages(obj);
     if (Part == 1 && g_flipped && IndexOf(g_bucket, obj) >= 0)
         DrawTurnedOver(g_brick_draw[Part], obj, g);  // the bucket's lid
     else
@@ -3770,12 +3790,13 @@ std::string EffectDebug()
     void* rod = Rod(lm);
     void* shown_gun = shown ? F<void*>(shown, kBoardOffGun) : nullptr;
     void* loaded = shown_gun ? F<void*>(shown_gun, kGunOffBall) : nullptr;
+    void* hole_mover = g_hole ? Mover(g_hole) : nullptr;  // (no mover while a level is being put back)
     snprintf(buf, sizeof buf,
              " flippers=%.0f,%.0f,%.0f,%.0f flipreach=%.0f,%.0f flipalive=%d flipturn=%d,%d goal=%d track=%d "
              "rod=%d,%d,%.0f zaps=%u zapat=%.0f,%.0f zaptwin=%d zappeg=%.0f,%.0f zaprod=%.0f lid=%d twinbounces=%u "
              "lidknocks=%u upcatches=%u fireball=%d charged=%d",
              pivots[0], pivots[1], pivots[2], pivots[3], reach[0], reach[1], alive, turns[0], turns[1],
-             lm ? F<int>(lm, kLogicOffTrackGoal) : -1, g_hole ? F<int>(Mover(g_hole), kMoverOffRadius) : -1,
+             lm ? F<int>(lm, kLogicOffTrackGoal) : -1, hole_mover ? F<int>(hole_mover, kMoverOffRadius) : -1,
              rod ? F<int>(rod, kRodOffState) : -1, rod ? F<int>(rod, kRodOffX) + 75 : -1,
              rod ? F<float>(rod, kRodOffY) + 40 : -1.0f, g_n_zaps, g_zap_x + 75, g_zap_y + 40, g_zap_twin ? 1 : 0,
              g_zap_peg_x + 75, g_zap_peg_y + 40, g_zap_rod_x + 75, LidOn() ? 1 : 0, g_n_twin_bounces,

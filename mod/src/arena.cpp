@@ -17,9 +17,13 @@ namespace {
 constexpr uintptr_t kMalloc = 0x63A0E5, kFree = 0x637FE8, kCalloc = 0x63A057, kRealloc = 0x63949E,
                     kMsize = 0x6439E3;
 // operator new (0x634E7A) calls malloc from here; its own caller's return address is then 6 slots up the stack
-// (return, size, 3 locals, saved EBP). Diagnostics only.
+// (return, size, 3 locals, saved EBP).
 constexpr uintptr_t kOperatorNewMallocCall = 0x634E97;
 constexpr int kOperatorNewCallerSlot = 6;
+// std::string's buffers come from here. Only the string that owns one ever reaches it, so its address orders nothing,
+// and its size depends on the computer: file paths hold the game's folder, names are the player's. On the normal heap
+// they can't make the next addresses differ.
+constexpr uintptr_t kStringBufferCall = 0x402295;
 
 constexpr uintptr_t kPreferredBases[] = {0x30000000, 0x38000000, 0x28000000, 0x40000000, 0x20000000};
 constexpr size_t kReserve = 256u << 20;
@@ -168,8 +172,9 @@ void Release(void* p, void* caller)
     }
     InterlockedDecrement(&g_live);
     // Only frees made by the synchronized code itself happen at the same point on both computers; reusing
-    // anything else (a finished sound, a closed dialog) would make the next addresses differ.
-    bool reuse = Routing() && h->size_class < kSmallClasses;
+    // anything else (a finished sound, a closed dialog) would make the next addresses differ. So would a block
+    // of an earlier duel, which a computer that has just started doesn't have.
+    bool reuse = Routing() && h->size_class < kSmallClasses && reinterpret_cast<uintptr_t>(p) >= g_stats.start;
     if (g_free_record && g_free_record_count < kFreeRecordCapacity) {
         FreeEntry& e = g_free_record[g_free_record_count++];
         e.size = h->capacity;
@@ -192,10 +197,11 @@ void* __cdecl HookMalloc(size_t n)
 {
     if (Routing()) {
         void* caller = _ReturnAddress();
-        if (caller == reinterpret_cast<void*>(kOperatorNewMallocCall))  // report operator new's caller instead
+        if (caller == reinterpret_cast<void*>(kOperatorNewMallocCall))  // it's operator new's caller that counts
             caller = static_cast<void**>(_AddressOfReturnAddress())[kOperatorNewCallerSlot];
-        if (void* p = Allocate(n, caller))
-            return p;
+        if (caller != reinterpret_cast<void*>(kStringBufferCall))
+            if (void* p = Allocate(n, caller))
+                return p;
     }
     return g_malloc(n);
 }
@@ -288,8 +294,8 @@ uintptr_t BeginDuel(uintptr_t start)
         Log("arena: host's duel start %08X is not available here, using %08X", static_cast<unsigned>(start),
             static_cast<unsigned>(mine));
     g_bump = mine;
-    if (g_bump > g_committed)
-        g_committed = g_bump;  // VirtualAlloc commits on demand from here (MEM_COMMIT works on reserved pages)
+    g_committed = g_bump;  // VirtualAlloc commits on demand from here: what lies ahead may have been jumped over
+                           // (a joiner starts where the host does) and committing a page twice does no harm
     memset(g_free, 0, sizeof g_free);
     g_stats = Stats();
     g_stats.start = mine;

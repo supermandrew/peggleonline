@@ -9,7 +9,8 @@ namespace upnp {
 struct Result {
     bool done = false;
     bool mapped = false;
-    std::string external_ip;  // router's public address, if it reported one
+    bool reachable = false;   // not mapped, but connecting to the public address comes back here: forwarded by hand
+    std::string external_ip;  // the public address, from the router or else from an address service
     std::string local_ip;     // this computer's address on the home network
     std::string error;
 };

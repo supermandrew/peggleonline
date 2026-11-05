@@ -10,6 +10,7 @@ constexpr uintptr_t kStringAssign = 0x4021B0;      // std::string::assign(const 
 constexpr uintptr_t kOperatorNew = 0x634E7A;       // cdecl
 constexpr uintptr_t kOperatorDelete = 0x634D4B;    // cdecl
 constexpr uintptr_t kDialogShowAnim = 0x4CD3F0;    // ESI = dialog, EDI = from_top
+constexpr uintptr_t kScanLevelPacks = 0x47A940;    // stdcall(LevelManager)
 constexpr uintptr_t kCloseDialogById = 0x432A00;   // fastcall(app, id)
 constexpr uintptr_t kEditDialogCtor = 0x4ADB70;    // stdcall(mem, id, const std::string& header, bool short_name)
 constexpr uintptr_t kEditWidgetStyle = 0x42A000;   // ECX = edit widget: game font, 12-char limit
@@ -67,6 +68,44 @@ void* DoDialog(int id, const char* header, const char* lines, const char* footer
     GameString h(header), l(lines), f(footer);
     using Fn = void*(__thiscall*)(void*, int, int, GameString*, GameString*, GameString*, int);
     return VCall<Fn>(App(), kAppSlotDoDialog)(App(), id, 1, &h, &l, &f, button_mode);
+}
+
+std::vector<std::vector<std::string>> LevelIds()
+{
+    std::vector<std::vector<std::string>> stages;
+    void* manager = App() ? At<void*>(App(), kAppOffLevelManager) : nullptr;
+    if (!manager)
+        return stages;
+    void** stage = At<void**>(manager, kLevelManagerOffStages);
+    void** stages_end = At<void**>(manager, kLevelManagerOffStages + 4);
+    for (; stage != stages_end; ++stage) {
+        stages.emplace_back();
+        void** level = At<void**>(*stage, kStageOffLevels);
+        void** levels_end = At<void**>(*stage, kStageOffLevels + 4);
+        for (; level != levels_end; ++level)
+            stages.back().push_back(ReadString(static_cast<char*>(*level) + kLevelOffId));
+    }
+    return stages;
+}
+
+std::string GameFolder() { return ReadString(static_cast<char*>(App()) + kAppOffGameFolder); }
+
+void ScanLevelPacks()
+{
+    reinterpret_cast<void(__stdcall*)(void*)>(kScanLevelPacks)(At<void*>(App(), kAppOffLevelManager));
+}
+
+bool FindLevel(const std::string& id, int& stage, int& level)
+{
+    auto stages = LevelIds();
+    for (size_t s = 0; s < stages.size(); ++s)
+        for (size_t l = 0; l < stages[s].size(); ++l)
+            if (_stricmp(stages[s][l].c_str(), id.c_str()) == 0) {
+                stage = static_cast<int>(s);
+                level = static_cast<int>(l);
+                return true;
+            }
+    return false;
 }
 
 void* GetDialog(int id)

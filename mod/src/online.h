@@ -12,5 +12,6 @@ bool InSession();
 bool IsHost();
 std::string PlayerName(int player);  // an online duel's: player 0 is the host
 void SetNameOverride(const std::string& name);  // testing
+void HideLevelsFromStage(int stage);             // testing: as if the level packs from that stage on weren't installed
 
 }  // namespace online

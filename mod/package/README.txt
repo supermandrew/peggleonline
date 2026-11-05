@@ -6,6 +6,16 @@ Mode and Red Peg Mode to duels, lets you play the whole game with a controller, 
 borderless full screen.
 Both players need Peggle Nights on Steam and this same version of the mod.
 
+Level packs: if the host picks a level from a pack the other player doesn't have, the other player is
+asked whether they want it. If they say yes the whole pack comes over, installs itself in their game's
+levelpacks folder and stays there (delete the file to remove it). Only say yes to people you trust. The
+Random button keeps to levels you both have.
+
+Hosting: the game opens the port on your router with UPnP. If your router won't, forward TCP port 28008
+to your computer in its settings. Hosting then asks api.ipify.org (or checkip.amazonaws.com) what your
+public address is, tries the port and shows you the address to give your opponent. Nothing else is sent
+anywhere, and only when the router couldn't say.
+
 
 INSTALL
 -------

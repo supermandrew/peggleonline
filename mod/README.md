@@ -11,8 +11,9 @@ documented in [../re/NOTES.md](../re/NOTES.md).
 | Path | What it is |
 |---|---|
 | `src/main.cpp` | Entry point: game-build check, crash logger, per-frame hook |
-| `src/online.cpp` | The Duel → Local/Online → Host/Join flow, handshake, level hand-off, leaving |
-| `src/lockstep.cpp` | Deterministic lockstep: shared random numbers, tick stream, input replay, synced widgets |
+| `src/online.cpp` | The Duel → Local/Online → Host/Join flow, handshake, which levels both players have, level hand-off, leaving |
+| `src/lockstep.cpp` | Deterministic lockstep: shared random numbers, tick stream, input replay, synced widgets; each turn the whole board is compared, and when the two differ both take one |
+| `src/packs.cpp` | Level packs between the players: which pack holds a level, sending one on its own thread, receiving into a temporary file, checking it before the game can see it |
 | `src/arena.cpp` | Deterministic allocator for the simulation (address-ordered sets must iterate identically) |
 | `src/chat.cpp` | The CHAT button, its phrase list and the box that shows what was said |
 | `src/chaos.cpp` | Chaos Mode and Red Peg Mode: their boxes on the Two Player Selection, the rounds, the red peg's hit and whose turn gets its effect, which effect comes next, the announcements |
@@ -68,6 +69,7 @@ python mod\tools\duo.py scenario   :: chat, duel to results (chat), replay level
 python mod\tools\duo.py full       :: all of the above, plus a local duel on A first
 python mod\tools\duo.py pad        :: the online duel again with a controller only (after start)
 python mod\tools\duo.py padfull    :: start, then pad
+python mod\tools\duo.py net        :: what two different computers do to each other: a freshly started joiner, one player's dialog, a level one lacks, the boards being repaired, a profile saved on one side, callers on the hosting port, a level pack going over and being stopped
 python mod\tools\duo.py padreports :: PlayStation controllers' HID reports in every form (after start; also in pad)
 python mod\tools\duo.py local      :: a local duel on A with two controllers (after start)
 python mod\tools\duo.py localfull  :: start, then local

@@ -9,12 +9,15 @@
 #include <mutex>
 
 #include "log.h"
+#include "protocol.h"
 
 namespace net {
 
 namespace {
 
 constexpr uint32_t kMaxFrame = 1 << 20;
+constexpr uint32_t kMaxHello = 256;
+constexpr DWORD kHelloWait = 5000;
 
 std::mutex g_mutex;  // guards everything below except the sockets' blocking calls
 HANDLE g_worker;  // not std::thread: one still running at process exit would call terminate()
@@ -107,6 +110,25 @@ void OnConnected(SOCKET s, const sockaddr* peer)
     ReceiveLoop();
 }
 
+// There's only one opponent, and a port open to the internet gets all sorts of callers: port scanners, a join that
+// gave up. Whoever connects has to say hello before the host stops waiting for an opponent.
+bool ReadHello(SOCKET s, Message& hello)
+{
+    DWORD wait = kHelloWait;
+    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<char*>(&wait), sizeof wait);
+    uint32_t len = 0;
+    if (!RecvAll(s, &len, 4) || len == 0 || len > kMaxHello)
+        return false;
+    hello.data.resize(len);
+    if (!RecvAll(s, hello.data.data(), static_cast<int>(len)) || hello.data[0] != proto::kHello)
+        return false;
+    hello.type = hello.data[0];
+    hello.data.erase(hello.data.begin());
+    wait = 0;
+    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<char*>(&wait), sizeof wait);
+    return true;
+}
+
 void HostThread(uint16_t port)
 {
     // Dual-stack listener, so both IPv4 and IPv6 opponents can connect.
@@ -133,19 +155,36 @@ void HostThread(uint16_t port)
         g_state = State::Listening;
     }
     Log("net: listening on port %u", port);
-    sockaddr_storage peer = {};
-    int peer_len = sizeof peer;
-    SOCKET s = accept(ls, reinterpret_cast<sockaddr*>(&peer), &peer_len);
-    {
+    for (;;) {
+        sockaddr_storage peer = {};
+        int peer_len = sizeof peer;
+        SOCKET s = accept(ls, reinterpret_cast<sockaddr*>(&peer), &peer_len);
+        if (s == INVALID_SOCKET) {
+            Fail(g_stop ? "closed" : "Hosting stopped unexpectedly.");
+            return;
+        }
+        {
+            std::lock_guard<std::mutex> lock(g_mutex);
+            g_sock = s;  // (Shutdown closes it, which ends the wait for a hello)
+        }
+        Message hello;
+        if (ReadHello(s, hello)) {
+            {
+                std::lock_guard<std::mutex> lock(g_mutex);
+                closesocket(g_listen);  // one opponent per session
+                g_listen = INVALID_SOCKET;
+                g_inbox.push_back(std::move(hello));
+            }
+            OnConnected(s, reinterpret_cast<sockaddr*>(&peer));
+            return;
+        }
+        Log("net: %s came and said nothing, still waiting", AddrToString(reinterpret_cast<sockaddr*>(&peer)).c_str());
         std::lock_guard<std::mutex> lock(g_mutex);
-        closesocket(g_listen);  // one opponent per session
-        g_listen = INVALID_SOCKET;
+        if (g_sock == s) {
+            closesocket(s);
+            g_sock = INVALID_SOCKET;
+        }
     }
-    if (s == INVALID_SOCKET) {
-        Fail(g_stop ? "closed" : "Hosting stopped unexpectedly.");
-        return;
-    }
-    OnConnected(s, reinterpret_cast<sockaddr*>(&peer));
 }
 
 void JoinThread(std::string host, uint16_t port)

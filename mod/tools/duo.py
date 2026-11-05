@@ -16,6 +16,16 @@ windows have focus and wherever the real mouse is.
   python duo.py scenario         chat -> results (chat) -> Replay Level -> results -> Play New Level -> new level
                                  -> B leaves
   python duo.py full             start, localfirst, connect, duel, scenario
+  python duo.py netfresh         a freshly started copy joins one that has played: together from the first tick
+  python duo.py netmenu          one player's Menu open through the intro holds nothing back
+  python duo.py netend           a profile saved on one computer alone as a duel ends, the next level together
+  python duo.py netlevels        a level the joiner doesn't have: refused with a message, Random stays within both
+  python duo.py netrepair        one game pushed off: found at the next turn, both take one board, pictures identical
+  python duo.py netmodes         the same in the middle of Chaos Mode and Red Peg Mode, with their effects in place
+  python duo.py netcallers       callers on the hosting port that aren't an opponent don't end the hosting
+  python duo.py netpack          B has no level pack: says no, then yes; it comes over, the game takes it, a duel on it
+  python duo.py netpackstops     either player stopping a pack part way, one damaged on the way: nothing left behind
+  python duo.py net              all of those, each from a fresh start
   python duo.py pad              the same with a (pretend) controller: Options > CONTROLLER and remapping, Duel >
                                  Online, the address on the on-screen keyboard, masters, aiming and shooting with the
                                  sticks, chat, the Menu, the results, leaving
@@ -73,7 +83,11 @@ windows have focus and wherever the real mouse is.
 """
 import json
 import os
+import hashlib
 import random
+import re
+import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -89,6 +103,8 @@ import gamectl  # noqa: E402
 
 # Our dialogs (online.cpp)
 DLG_MODE, DLG_ROLE, DLG_ADDRESS, DLG_HOSTING, DLG_JOINING, DLG_WAIT, DLG_NOTICE = 9001, 9002, 9003, 9004, 9005, 9006, 9007
+DLG_PORT, DLG_PACK_WAIT, DLG_PACK_OFFER, DLG_PACK_PROGRESS = 9008, 9009, 9010, 9011
+SECOND_GAME = os.path.join(MOD, 'test', 'second_game')  # copy B's own folder, for tests that need the copies to differ
 # The game's own dialogs
 DLG_GAME_MENU, DLG_LEAVE_GAME = 19, 4  # in-game Menu, and its "Leave Game?" confirmation
 DLG_SELECTION = 1                      # master selection
@@ -136,7 +152,7 @@ def state(k):
 
 
 def log_path(k):
-    return os.path.join(GAME, 'mods', 'logs', f'netplay-{pid(k)}.log')
+    return os.path.join(load()[k].get('dir', GAME), 'mods', 'logs', f'netplay-{pid(k)}.log')
 
 
 def log_lines(k):
@@ -398,7 +414,27 @@ def finish():
     ok('copies closed, debug mode off')
 
 
-def start():
+def second_game():
+    """A game folder of copy B's own: the game's files linked in (nothing is copied but the mod), no level packs."""
+    os.makedirs(os.path.join(SECOND_GAME, 'mods'), exist_ok=True)
+    os.makedirs(os.path.join(SECOND_GAME, 'levelpacks'), exist_ok=True)
+    for name in ('bass_orig.dll', 'j2k-codec.dll', 'main.pak'):
+        if not os.path.exists(os.path.join(SECOND_GAME, name)):
+            os.link(os.path.join(GAME, name), os.path.join(SECOND_GAME, name))
+    for name in ('properties', 'music'):
+        if not os.path.exists(os.path.join(SECOND_GAME, name)):
+            subprocess.run(['cmd', '/c', 'mklink', '/J', os.path.join(SECOND_GAME, name), os.path.join(GAME, name)],
+                           capture_output=True)
+    shutil.copyfile(os.path.join(GAME, 'bass.dll'), os.path.join(SECOND_GAME, 'bass.dll'))
+    shutil.copyfile(DEBUG_FLAG, os.path.join(SECOND_GAME, 'mods', 'debug.txt'))
+    for name in os.listdir(os.path.join(SECOND_GAME, 'levelpacks')):
+        path = os.path.join(SECOND_GAME, 'levelpacks', name)
+        if os.path.isfile(path):
+            os.remove(path)
+
+
+def start(own_folder=False):
+    """own_folder: copy B runs from a game folder of its own, without the level packs."""
     if not os.path.exists(DEBUG_FLAG):  # the test pipe and diagnostics
         with open(DEBUG_FLAG, 'w') as f:
             f.write('Enables the online mod\'s test pipe and diagnostics. Delete for normal play.\n')
@@ -433,11 +469,18 @@ def start():
         raise StepFailed(f'copy A did not start: {out.strip()}')
     if not os.path.exists(os.path.join(HERE, 'run2.py')):
         raise StepFailed('copy B needs mod/tools/run2.py, a local helper that is not in the repository')
-    out = subprocess.run([sys.executable, os.path.join(HERE, 'run2.py')], capture_output=True, text=True).stdout
+    env = dict(os.environ)
+    if own_folder:
+        second_game()
+        env['PEGGLE_GAME_DIR'] = SECOND_GAME
+    out = subprocess.run([sys.executable, os.path.join(HERE, 'run2.py')], capture_output=True, text=True,
+                         env=env).stdout
     b = dict(kv.split('=') for kv in out.split() if '=' in kv)
     if 'pid' not in b or b.get('hwnd') == '?':
         raise StepFailed(f'copy B did not start: {out.strip()}')
     st = {'A': {'pid': int(a['pid']), 'hwnd': int(a['hwnd'])}, 'B': {'pid': int(b['pid']), 'hwnd': int(b['hwnd'])}}
+    if own_folder:
+        st['B']['dir'] = SECOND_GAME
     with open(STATE, 'w') as f:
         json.dump(st, f)
     gamectl.main(['place', str(st['A']['hwnd']), '850', '300'])
@@ -460,7 +503,8 @@ def start():
     ok('both copies at the main menu')
 
 
-def connect(level=(140, 170)):
+def connect(level=(140, 170), pick=True, while_hosting=None):
+    """while_hosting: called once A is hosting, before B joins."""
     send('B', 'setname Dad')  # both copies share one profile; tell them apart
     since = mark()
     for k in 'AB':
@@ -475,6 +519,8 @@ def connect(level=(140, 170)):
     time.sleep(0.8)
     click('A', 220, 304)                                     # Host Game
     wait_log('A', 'net: listening', since, 5)
+    if while_hosting:
+        while_hosting()
     click('B', 363, 304)                                     # Join Game
     wait(lambda: dialog_open('B', DLG_ADDRESS), 5, 'copy B: Join Game did not open the address box')
     time.sleep(0.8)
@@ -484,6 +530,8 @@ def connect(level=(140, 170)):
         wait_log(k, 'online: opponent is', since, 10)
     ok('connected (A hosts, B joined 127.0.0.1)')
     time.sleep(1.5)  # level screen slides in on A
+    if not pick:
+        return
     level_page('A', 1)
     since = mark()
     click('A', *level)
@@ -644,6 +692,385 @@ def scenario():
     wait_log('B', 'leaving session', since, 10)
     wait_log('A', 'left the game', since, 10, 'copy A was not told that B left')
     ok('B left; A was told')
+
+
+# ---- what two different computers do to each other ----
+
+def turn_checks(k, since=0):
+    """What the whole board came to as each turn began on copy k, in order: (tick, bytes, hash)."""
+    found = (re.search(r'turn check at tick (\d+): (\d+) bytes, (\w+)', line) for line in log_lines(k)[since:])
+    return [m.groups() for m in found if m]
+
+
+def boards_match(since, at_least):
+    a, b = turn_checks('A', since['A']), turn_checks('B', since['B'])
+    n = min(len(a), len(b))
+    if n < at_least:
+        raise StepFailed(f'only {n} turns were compared')
+    if a[:n] != b[:n]:
+        raise StepFailed(f'the boards differ: {[x for x in zip(a, b) if x[0] != x[1]][:3]}')
+    ok(f'the whole board the same on both computers at all {n} turns')
+
+
+def logged(k, text, since):
+    return [line for line in log_lines(k)[since[k]:] if text in line]
+
+
+def restart_b():
+    """Copy B closes for good and starts again, as a player who restarts their game."""
+    subprocess.run(['taskkill', '/F', '/PID', str(pid('B'))], capture_output=True)
+    time.sleep(1.5)
+    subprocess.run(['reg', 'add', r'HKCU\Software\Steam\PeggleNights', '/v', 'InProgress', '/t', 'REG_DWORD',
+                    '/d', '0', '/f'], capture_output=True)
+    out = subprocess.run([sys.executable, os.path.join(HERE, 'run2.py')], capture_output=True, text=True).stdout
+    b = dict(kv.split('=') for kv in out.split() if '=' in kv)
+    if 'pid' not in b or b.get('hwnd') == '?':
+        raise StepFailed(f'copy B did not start: {out.strip()}')
+    st = load()
+    st['B'] = {'pid': int(b['pid']), 'hwnd': int(b['hwnd'])}
+    with open(STATE, 'w') as f:
+        json.dump(st, f)
+    gamectl.main(['place', str(st['B']['hwnd']), '1670', '300'])
+    wait(lambda: send('B', 'ping') == 'pong', 30, 'copy B test pipe never answered')
+    wait(lambda: title_button_showing('B'), 40, 'copy B never showed its title screen')
+
+    def past_title():
+        if not title_button_showing('B'):
+            return True
+        click('B', 400, 520)
+        return False
+    wait(past_title, 40, 'copy B stayed on its title screen')
+    time.sleep(1.5)
+    ok(f"B restarted (pid {st['B']['pid']})")
+
+
+def net_fresh():
+    """A has played online and B has just started, so A has memory from its earlier duel to give back and B doesn't:
+    they agree from the first tick, and B's selection appears (it didn't, behind an OUT OF SYNC box)."""
+    connect()
+    time.sleep(2)
+    duel()
+    wait(can_shoot, 15, 'nobody can shoot in the first duel')
+    autoplay(2, seed=3)
+    time.sleep(3)
+    since = mark()
+    leave_board('A')
+    wait_log('B', 'left the game', since, 10, 'copy B was not told that A left')
+    time.sleep(3)
+    restart_b()
+    since = mark()
+    connect()
+    ok('the selection came up on both with B freshly started')
+    time.sleep(2)
+    duel()
+    wait(can_shoot, 15, 'nobody can shoot in the second duel')
+    autoplay(4, seed=5)                                      # (fails on any tick that differs)
+    time.sleep(3)
+    boards_match(since, 3)
+
+
+def net_menu():
+    """B's Menu is open through the intro: only B has that dialog, so the selection must come on the same tick on both
+    (the game waits for no dialogs being open)."""
+    connect(pick=False)
+    level_page('A', 1)
+    since = mark()
+    click('A', 140, 170)
+    for k in 'AB':
+        wait_log(k, 'lockstep: begin', since, 10)
+    time.sleep(0.4)
+    click('B', 38, 560)
+    wait(lambda: dialog_open('B', DLG_GAME_MENU), 5, 'copy B: Menu did not open')
+    wait(lambda: all(state(k).get('seldlg') == '1' for k in 'AB'), 15, "B's Menu held the master selection back")
+    if logged('B', 'DESYNC', since):
+        raise StepFailed(f"B's Menu made the games differ: {logged('B', 'DESYNC', since)[0]}")
+    ok('the selection came up on both with the Menu open on one')
+    click('B', *(button_center('B', 'Return to Game') or button_center('B', 'Done') or (400, 480)))
+    time.sleep(2)
+
+
+def net_end():
+    """As a duel ends the game saves the player's own files, named after them and only if something changed, so what
+    it allocates differs per player, and the results say if a trophy is waiting: B has another name, a profile to save
+    and a trophy, A doesn't. The games mustn't count
+    that as differing, and the next duel starts together."""
+    connect()
+    time.sleep(2)
+    since = mark()
+    duel()
+    wait(can_shoot, 15, 'nobody can shoot')
+    send('B', 'profilename Opponent')
+    send('B', f"poke profile ec {int(send('B', 'peek profile ec')) | 1}")
+    trophies = hex(int(send('B', 'peek profile 13c')) & 0xFFFFFFFF)  # a trophy waiting: the results say so
+    send('B', f"poke profile 44 {max(1, int(send('B', 'peek profile 44')))}")
+    send('B', f'poke {trophies} 0 0')
+    if autoplay(60, seed=7) != 'results':
+        raise StepFailed('the duel did not reach the results screen')
+    results_settled()
+    for k in 'AB':
+        if logged(k, 'DESYNC', since):
+            raise StepFailed(f'copy {k}: {logged(k, "DESYNC", since)[0]}')
+    ok('a profile saved on one computer alone changed nothing in the duel')
+    boards_match(since, 3)
+    click('A', 327, 453)                                     # host: Play New Level
+    wait(lambda: dialog_open('B', DLG_WAIT), 10, 'B is not waiting for the host after Play New Level')
+    time.sleep(2)
+    since = mark()
+    click('A', 600, 170)
+    for k in 'AB':
+        wait_log(k, 'lockstep: begin', since, 10)
+    wait(lambda: all(state(k).get('seldlg') == '1' for k in 'AB'), 15, 'the selection did not appear for the new level')
+    time.sleep(1)
+    if logged('B', 'DESYNC', since):
+        raise StepFailed(logged('B', 'DESYNC', since)[0])
+    ok('the next level started together')
+
+
+def net_levels():
+    """B doesn't have the level packs (or anything past Stage One, to pretend): levels it lacks can't be started, with
+    a message for the host, and the Random button only comes up with levels both have."""
+    send('B', 'hidelevels 1')
+    since = mark()
+    connect(pick=False)
+    wait_log('A', 'of ours aren', since, 5, 'A never heard which levels B has')
+    level_page('A', 2)
+    mark_before = mark()
+    click('A', 140, 170)
+    wait(lambda: dialog_open('A', DLG_NOTICE), 5, 'picking a level B lacks gave no message')
+    if send('A', f'findstr {DLG_NOTICE} doesn') == 'none' and not logged('A', "doesn't have", mark_before):
+        raise StepFailed('no word of the level being missing')
+    if logged('A', 'lockstep: begin', mark_before):
+        raise StepFailed('a level B lacks was started anyway')
+    ok('a level the opponent lacks: refused, with a message')
+    time.sleep(1.5)
+    click('A', *(button_center('A', 'OK') or button_center('A', 'Ok')))
+    wait(lambda: not dialog_open('A', DLG_NOTICE), 5, 'the message did not close')
+    time.sleep(1)
+    for line in send('A', 'widgets').splitlines():
+        if 'id=103' in line:
+            m = re.search(r'(\d+),(\d+) (\d+)x(\d+)', line)
+            x, y, w, h = map(int, m.groups())
+            break
+    else:
+        raise StepFailed('no Random button on the level screen')
+    picked = mark()
+    click('A', x + w // 2, y + h // 2)
+    for k in 'AB':
+        wait_log(k, 'lockstep: begin', picked, 10)
+    wait(lambda: all(state(k).get('seldlg') == '1' for k in 'AB'), 15, 'no master selection after Random')
+    line = logged('A', 'online: starting', picked)[0]
+    if ' stage 0 ' not in line:
+        raise StepFailed(f'Random came up with a level B lacks: {line}')
+    ok(f"Random stayed within what both have: {line.split('starting ')[1].split(' (')[0]}")
+    time.sleep(2)
+    duel()
+    wait(can_shoot, 15, 'nobody can shoot')
+    autoplay(2, seed=21)
+
+
+def net_repair():
+    """One game is pushed off as a shot goes (scores and balls, as a bug would): the next turn finds out, the one about
+    to shoot hands over its board, and both are the same again, down to the pixel, and stay so."""
+    connect()
+    time.sleep(2)
+    duel()
+    wait(can_shoot, 15, 'nobody can shoot')
+    autoplay(2, seed=31)
+    time.sleep(2)
+    since = mark()
+    logic = hex(int(send('B', 'peek board 720')) & 0xFFFFFFFF)
+    send('B', f"poke {logic} 200 {int(send('B', f'peek {logic} 200')) + 12345}")
+    autoplay(1, seed=32)
+    for k in 'AB':
+        wait_log(k, 'BOARDS DIFFER', since, 30, f'copy {k} never noticed the boards differ')
+    for k in 'AB':
+        wait_log(k, 'took one board', since, 30, f'copy {k} never took the one board')
+    ok('the difference was found and both took one board')
+    time.sleep(1)
+    synced('repaired')
+    after = mark()
+    scores = [send(k, f"peek {hex(int(send(k, 'peek board 720')) & 0xFFFFFFFF)} 200 2") for k in 'AB']
+    if scores[0] != scores[1]:
+        raise StepFailed(f'the scores still differ: {scores}')
+    autoplay(4, seed=33)
+    time.sleep(3)
+    boards_match(after, 2)
+    synced('repaired_later')
+    for k in 'AB':
+        if logged(k, 'BOARDS DIFFER', after) or logged(k, 'DESYNC', after):
+            raise StepFailed(f'copy {k} differed again after the repair')
+    ok('one repair, and the two games stayed the same after it')
+
+
+def net_repair_modes():
+    """The same in the middle of Chaos Mode and Red Peg Mode, with an effect in place each time (a second bucket,
+    the board upside down, wormholes, portals): the effect comes through the repair, the same on both."""
+    connect()
+    time.sleep(2)
+    for box in (chaos_box, red_box):
+        x, y, on = box('A')
+        if not on:
+            click('A', x, y)
+        wait(lambda: box('A')[2] and box('B')[2], 5, "the joiner's box did not follow the host's")
+    for k in 'AB':
+        send(k, 'chaos next 2 13 9 14 3 6')
+    duel()
+    repaired = []
+    for shot in range(30):
+        wait(can_shoot, 60, 'nobody can shoot')
+        time.sleep(1.5)                                      # (a click during the effect's name is not a shot)
+        e = int(chaos_state('A')['effect'])
+        if e < 0 or e in repaired:
+            if autoplay(1, seed=400 + shot) == 'results':
+                break
+            continue
+        since = mark()
+        logic = hex(int(send('B', 'peek board 720')) & 0xFFFFFFFF)
+        send('B', f"poke {logic} 200 {int(send('B', f'peek {logic} 200')) + 777}")
+        if autoplay(1, seed=400 + shot) == 'results':
+            break
+        for k in 'AB':
+            wait_log(k, 'took one board', since, 40, f'copy {k} never took the one board under {CHAOS_EFFECTS[e]}')
+        time.sleep(1)
+        a, b = chaos_state('A'), chaos_state('B')
+        if a['effect'] != b['effect'] or a['round'] != b['round']:
+            raise StepFailed(f'the modes differ after the repair: A {a}, B {b}')
+        synced(f'repaired_{e}')
+        repaired.append(e)
+        print(f'  repaired under {CHAOS_EFFECTS[e]}', flush=True)
+        if len(repaired) == 4:
+            break
+    if len(repaired) < 2:
+        raise StepFailed(f'only {len(repaired)} repairs under an effect were tried')
+    since = mark()
+    autoplay(3, seed=470)
+    time.sleep(3)
+    boards_match(since, 1)
+    ok(f"repairs under {', '.join(CHAOS_EFFECTS[e] for e in repaired)}: the same on both after each")
+
+
+def net_callers():
+    """A port open to the internet gets callers that aren't an opponent. None of them ends the hosting, and the
+    opponent still gets in after them."""
+    def callers():
+        since = mark()
+        socket.create_connection(('127.0.0.1', 28008), 3).close()                  # connects and goes
+        s = socket.create_connection(('127.0.0.1', 28008), 3)                      # something else entirely
+        s.sendall(b'GET / HTTP/1.0\r\n\r\n')
+        s.close()
+        time.sleep(0.5)
+        s = socket.create_connection(('127.0.0.1', 28008), 3)                      # connects and says nothing
+        wait(lambda: len(logged('A', 'came and said nothing', since)) >= 3, 8, 'the callers were not turned away')
+        s.close()
+        if not dialog_open('A', DLG_HOSTING) or logged('A', 'leaving session', since):
+            raise StepFailed('a caller ended the hosting')
+        ok('three callers that were no opponent: still hosting')
+    connect(pick=False, while_hosting=callers)
+    ok('the opponent got in after them')
+
+
+def widget_center(k, widget_id):
+    for line in reversed(send(k, 'widgets').splitlines()):  # (the front one: a dialog can be over another)
+        if f'id={widget_id} ' in line + ' ':
+            x, y, w, h = map(int, re.search(r'(\d+),(\d+) (\d+)x(\d+)', line).groups())
+            return x + w // 2, y + h // 2
+    raise StepFailed(f'copy {k} shows no widget {widget_id}')
+
+
+def pack_files():
+    folder = os.path.join(SECOND_GAME, 'levelpacks')
+    return sorted(n for n in os.listdir(folder) if os.path.isfile(os.path.join(folder, n)))
+
+
+def pick_pack_level():
+    """A picks a level from the pack B lacks (the last stage's first): B is asked."""
+    click('A', 140, 170)
+    wait(lambda: dialog_open('A', DLG_PACK_WAIT), 5, "A didn't start asking")
+    wait(lambda: dialog_open('B', DLG_PACK_OFFER), 5, 'B was not asked about the level pack')
+    time.sleep(1.2)                                          # the dialog slides in
+
+
+def net_pack():
+    """B doesn't have a level pack A does. B says no: nothing changes. B says yes: the pack comes over, the game takes
+    it without a restart, the level A picked starts, and the duel runs together on it."""
+    start(own_folder=True)
+    since = mark()
+    connect(pick=False)
+    wait_log('A', "10 of ours aren't", since, 5, 'A should know B lacks the 10 levels of the Spring pack')
+    level_page('A', 14)
+    pick_pack_level()
+    frame('B', 'pack_offer')
+    click('B', *widget_center('B', 1001))                    # No
+    wait(lambda: dialog_open('A', DLG_NOTICE), 5, "A wasn't told B said no")
+    if pack_files():
+        raise StepFailed(f'B said no and has {pack_files()}')
+    ok('B said no: A was told and nothing was installed')
+    time.sleep(1.5)
+    click('A', *widget_center('A', 1000))
+    wait(lambda: not dialog_open('A', DLG_NOTICE), 5, 'the message did not close')
+    time.sleep(1)
+    pick_pack_level()
+    since = mark()
+    click('B', *widget_center('B', 1000))                    # Yes
+    for k in 'AB':
+        wait_log(k, 'lockstep: begin', since, 20, f'copy {k} did not start the level after the pack came over')
+    if pack_files() != ['z_spring.pak']:
+        raise StepFailed(f"B's levelpacks: {pack_files()}")
+    digest = [hashlib.md5(open(p, 'rb').read()).hexdigest() for p in (
+        os.path.join(GAME, 'levelpacks', 'z_spring.pak'), os.path.join(SECOND_GAME, 'levelpacks', 'z_spring.pak'))]
+    if digest[0] != digest[1]:
+        raise StepFailed('the pack that arrived is not the one sent')
+    ok('B said yes: the pack came over whole and the game took it without a restart')
+    wait(lambda: all(state(k).get('seldlg') == '1' for k in 'AB'), 15, 'no master selection on the new level')
+    time.sleep(2)
+    since = mark()
+    duel()
+    wait(can_shoot, 15, 'nobody can shoot')
+    autoplay(4, seed=41)
+    time.sleep(3)
+    boards_match(since, 2)
+    synced('pack_level')
+    ok('a duel on a level that came over: the same on both')
+
+
+def net_pack_stops():
+    """Either player can stop it part way, and a pack damaged on the way isn't installed. Nothing is left behind."""
+    start(own_folder=True)
+    connect(pick=False)
+    send('A', 'packthrottle 200')
+    level_page('A', 14)
+    pick_pack_level()
+    click('B', *widget_center('B', 1000))
+    wait(lambda: dialog_open('B', DLG_PACK_PROGRESS), 5, 'no progress on B')
+    time.sleep(2)
+    if pack_files() != ['z_spring.pak.part']:
+        raise StepFailed(f'on the way, B has {pack_files()}')
+    click('B', *widget_center('B', 1000))                    # Cancel
+    wait(lambda: dialog_open('A', DLG_NOTICE), 5, "A wasn't told B stopped")
+    wait(lambda: not pack_files(), 5, f'B stopped and has {pack_files()}')
+    ok('B stopped the download: A was told and nothing was left behind')
+    time.sleep(1.5)
+    click('A', *widget_center('A', 1000))
+    wait(lambda: not dialog_open('A', DLG_NOTICE), 5, 'the message did not close')
+    time.sleep(1)
+    pick_pack_level()
+    click('B', *widget_center('B', 1000))
+    wait(lambda: dialog_open('B', DLG_PACK_PROGRESS), 5, 'no progress on B')
+    time.sleep(2)
+    click('A', *widget_center('A', 1000))                    # A's Cancel
+    wait(lambda: not dialog_open('B', DLG_PACK_PROGRESS), 5, "B's download did not stop with A's")
+    wait(lambda: not pack_files(), 5, f'A stopped and B has {pack_files()}')
+    ok('A stopped sending: B stopped and nothing was left behind')
+    time.sleep(1)
+    send('A', 'packthrottle 0')
+    send('A', 'packcorrupt 1')
+    pick_pack_level()
+    click('B', *widget_center('B', 1000))
+    wait(lambda: dialog_open('A', DLG_NOTICE), 15, "A wasn't told the pack didn't install")
+    if pack_files():
+        raise StepFailed(f'a damaged pack left {pack_files()}')
+    ok('a pack damaged on the way: not installed, both told')
+    send('A', 'packcorrupt 0')
 
 
 # ---- the same, played with the controller ----
@@ -3163,6 +3590,20 @@ def main(argv):
             padscenario()
         elif cmd == 'padreports':
             pad_reports()
+        elif cmd in ('netfresh', 'netmenu', 'netend', 'netlevels', 'netrepair', 'netmodes', 'netcallers'):
+            start()
+            {'netfresh': net_fresh, 'netmenu': net_menu, 'netend': net_end, 'netlevels': net_levels,
+             'netrepair': net_repair, 'netmodes': net_repair_modes, 'netcallers': net_callers}[cmd]()
+        elif cmd == 'netpack':
+            net_pack()
+        elif cmd == 'netpackstops':
+            net_pack_stops()
+        elif cmd == 'net':
+            for test in (net_fresh, net_menu, net_levels, net_repair, net_repair_modes, net_end, net_callers):
+                start()
+                test()
+            net_pack()
+            net_pack_stops()
         elif cmd == 'padfull':
             start()
             padscenario()

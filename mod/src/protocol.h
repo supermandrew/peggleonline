@@ -4,7 +4,7 @@
 
 namespace proto {
 
-constexpr uint32_t kVersion = 10;
+constexpr uint32_t kVersion = 12;
 
 enum Type : uint8_t {
     kHello = 1,    // Hello
@@ -17,6 +17,14 @@ enum Type : uint8_t {
     kDesync = 14,    // u32 tick: the games were found to differ (diagnostics)
     kChat = 15,      // Chat: a player said one of the set phrases (chat.cpp)
     kDuelOptions = 16,  // DuelOptions: the host's boxes on the Two Player Selection, for the joiner to see
+    kLevelList = 17,    // the ids of every level this game has, a line each: what can be played together
+    kTurnCheck = 18,    // TurnCheck: what the whole board came to as a turn began
+    kPackOffer = 19,    // PackOffer: the host picked a level the joiner lacks, in this level pack
+    kPackReply = 20,    // u8: the joiner wants it (1) or doesn't, or no longer does (0)
+    kPackData = 21,     // u32 offset, then that part of the pack
+    kPackEnd = 22,      // PackEnd: that was all of it
+    kPackDone = 23,     // u8: the joiner has it in place and has sent its new kLevelList (1), or couldn't (0)
+    kPackCancel = 24,   // (empty) the host gave up on sending
 };
 
 #pragma pack(push, 1)
@@ -25,15 +33,32 @@ struct Hello {
     uint32_t game_timestamp;
     char name[32];
     uint32_t clock;  // sender's update counter when sent
+    uint32_t build;  // the mod's link time (diagnostics: both logs say what each side was running)
 };
 
 struct Level {
     int32_t stage;
     int32_t level;
+    char id[48];  // the level's name: level packs can put a level at another stage on each computer
     uint32_t seed;
     uint16_t fpu_control;  // host's x87 control word, used by both sides inside the simulation
     uint32_t arena_start;  // where the host's deterministic allocations for this duel begin
     uint32_t clock;        // the game's update counter at tick 0, on both computers (above both counters)
+};
+
+struct PackOffer {
+    char file[64];
+    uint32_t size;
+};
+
+struct PackEnd {
+    uint32_t crc;
+};
+
+struct TurnCheck {
+    uint32_t tick;
+    uint32_t hash;  // of the game's own copy of the whole board
+    uint32_t size;
 };
 
 struct Select {

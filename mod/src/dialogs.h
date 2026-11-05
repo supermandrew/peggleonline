@@ -18,6 +18,8 @@ void Install(ResultHandler handler);
 
 // Header, text and one bottom button.
 void Message(int id, const char* header, const std::string& text, const char* footer);
+// Header, text, Yes (kFooter) and No (kCancel).
+void YesNo(int id, const char* header, const std::string& text);
 // Header, text, two side-by-side choices (kChoiceA, kChoiceB) and a bottom button (kFooter, e.g. "Cancel").
 void Choice(int id, const char* header, const std::string& text, const char* choice_a, const char* choice_b,
             const char* footer);
@@ -27,6 +29,7 @@ std::string TextEntryValue(int id);
 
 void SetText(int id, const std::string& text);  // replace the body text of an open Message/Choice dialog
 bool IsOpen(int id);
+int OpenCount();  // how many of the mod's dialogs are open
 void Close(int id);
 
 // A dialog of a given size for the caller to fill with buttons. Its results (the bottom button, kFooter, and the

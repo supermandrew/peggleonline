@@ -153,6 +153,14 @@ void Message(int id, const char* header, const std::string& text, const char* fo
     game::ShowDialogAnimated(dlg, true);
 }
 
+void YesNo(int id, const char* header, const std::string& text)
+{
+    game::CloseDialog(id);
+    void* dlg = game::DoDialog(id, header, text.c_str(), "", game::kButtonsYesNo);
+    FindLinesOffset(dlg, text.c_str());
+    game::ShowDialogAnimated(dlg, true);
+}
+
 void Choice(int id, const char* header, const std::string& text, const char* choice_a, const char* choice_b,
             const char* footer)
 {
@@ -190,6 +198,15 @@ void TextEntry(int id, const char* header, const std::string& initial)
     Resize(dlg, 400 - w / 2, 300 - h / 2, w, h);
     game::ShowDialogAnimated(dlg, true);
     game::AddDialog(id, dlg);
+}
+
+int OpenCount()
+{
+    int open = 0;
+    for (int id = kFirstId; id <= kLastId; ++id)
+        if (game::GetDialog(id))
+            ++open;
+    return open;
 }
 
 std::string TextEntryValue(int id)

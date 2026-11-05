@@ -4,6 +4,7 @@
 // Offsets are raw byte offsets from the start of the object (the decompiler's *_data fields are shifted).
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace game {
 
@@ -45,6 +46,12 @@ constexpr int kAppOffStage = 0x7F8;        // level chosen on the level screen: 
 constexpr int kAppOffLevel = 0x7FC;        // ... and level index within the stage
 constexpr int kAppOffBoard = 0x864;        // Board*
 constexpr int kAppOffProfile = 0x934;      // current player profile (name: std::string at +4, stage at +0x2C)
+constexpr int kProfileOffStageReached = 0x2C;
+constexpr int kAppOffGameFolder = 0x7D8;      // std::string, no slash at the end
+constexpr int kAppOffLevelManager = 0x910;
+constexpr int kLevelManagerOffStages = 0x10;  // std::vector<Stage*>: stages.cfg, then each level pack's
+constexpr int kStageOffLevels = 0xA8;         // std::vector<LevelInfo*>
+constexpr int kLevelOffId = 0x1C;             // std::string: the name its file goes by
 constexpr int kModeDuel = 3;
 
 // ---- DDInterface (surfaces are IDirectDrawSurface v1 interfaces) ----
@@ -115,6 +122,10 @@ void AssignString(void* game_string, const char* s);
 void* GameNew(size_t size);
 void* DoDialog(int id, const char* header, const char* lines, const char* footer, int button_mode);
 void* GetDialog(int id);
+std::vector<std::vector<std::string>> LevelIds();  // every level this game has, by stage
+bool FindLevel(const std::string& id, int& stage, int& level);
+std::string GameFolder();
+void ScanLevelPacks();  // loads any new pack in the levelpacks folder, as the main menu does every second or so
 void AddDialog(int id, void* dialog);
 void ShowDialogAnimated(void* dialog, bool from_top);  // slide-in animation + sound, as the game does it
 void CloseDialog(int id);                                // slide-out and remove

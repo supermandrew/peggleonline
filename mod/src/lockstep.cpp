@@ -9,7 +9,9 @@
 
 #include "arena.h"
 #include "chaos.h"
+#include "chat.h"
 #include "debug.h"
+#include "dialogs.h"
 #include "game.h"
 #include "hook.h"
 #include "log.h"
@@ -32,7 +34,17 @@ constexpr int kBoardOffLogic = 0x720;
 constexpr int kLogicOffState = 0x04;
 constexpr int kLogicOffCurrentPlayer = 0x1AC;
 constexpr int kLogicOffBalls = 0x208;  // int[2]
-constexpr int kStateOver = 5, kStateIntro = 8, kStateSelection = 9;  // also 1 aiming, 2/3 ball in play, 6 turn over
+constexpr int kStateOver = 5, kStateIntro = 8, kStateSelection = 9;  // also 2/3 ball in play, 6 turn over
+constexpr int kStateAiming = 1;
+constexpr uintptr_t kDuelBookkeepingCall = 0x46BEC7;  // the duel ends: 0x40A440, ECX board
+constexpr uintptr_t kCopyBoard = 0x405D00;  // stdcall(board) -> a new DataWriter holding all of the board
+constexpr uintptr_t kLoadBoard = 0x405DB0;  // ECX DataWriter, EDX board, stdcall(bool with the shot's inputs) -> AL
+constexpr int kWriterSlotWrite = 1;         // thiscall(const void*, size)
+constexpr int kBoardOffPowerDisplay = 0x704;  // the master's display: its flash as a power's count changes runs on
+constexpr int kDisplayOffFlash = 0x30;        // each computer's own drawing, so it's no part of the comparison
+constexpr int kWriterOffData = 0x08, kWriterOffSize = 0x0C;
+constexpr int kAppOffDialogCount = 0x32C;   // how many dialogs are open (the size of the app's std::map of them)
+constexpr int kDialogLeaveGame = 4, kDialogGameMenu = 19;
 constexpr int kLogicOffAim = 0xEC;                 // float: angle the cannon turns towards
 constexpr int kLogicOffAimDirty = 0x20;            // bool: the mouse moved, re-aim at the next update
 constexpr int kBoardOffCannon = 0xD4, kCannonOffAngle = 0x150;
@@ -515,6 +527,7 @@ enum ItemKind : uint8_t {
     kItemPlayNow = 4,  // u8 master1, u8 master2, u8 options (1: Chaos Mode, 2: Red Peg Mode): Play Now pressed in
                        // the selection dialog
     kItemCheck = 5,    // u32 tick, u32 hash: state fingerprint after that tick
+    kItemBoard = 6,    // u32 size, BoardHeader, the board, the modes' state: both games take this board, right here
 };
 
 bool g_active;
@@ -872,8 +885,26 @@ void __fastcall HookSelCheckbox(void* listener, void*, int id, int checked)
 // ---- Ticks ----
 bool g_ticking_slot;
 
+// The simulation asks how many dialogs are open: the intro waits for there to be none before the master selection
+// (0x4737A9) and Board::Update holds two things back. One computer's own dialogs (its Menu, the mod's) don't exist
+// on the other, so they don't count: else the Menu or a message left open stalls that computer's duel alone.
+struct LocalDialogsHidden {
+    int hidden = 0;
+    LocalDialogsHidden()
+    {
+        int& open = game::At<int>(game::App(), kAppOffDialogCount);
+        if (open == 0)
+            return;
+        hidden = dialogs::OpenCount() + (game::GetDialog(kDialogGameMenu) ? 1 : 0) +
+                 (game::GetDialog(kDialogLeaveGame) ? 1 : 0);
+        open -= hidden;
+    }
+    ~LocalDialogsHidden() { game::At<int>(game::App(), kAppOffDialogCount) += hidden; }
+};
+
 void RunTickSynced(void* board)
 {
+    LocalDialogsHidden hidden;
     SyncScope sync;
     g_orig_update(board);
     void* slot = game::At<void*>(board, kBoardOffSlotMachine);
@@ -1048,6 +1079,17 @@ __declspec(naked) void PauseHook()
 }
 
 // An online duel is not saved as the player's unfinished local duel.
+// As a duel ends the game updates and saves the player's own records and builds the results: the allocations differ
+// with what each player's profile holds, and nothing in them matters to the simulation.
+using DuelBookkeepingFn = void(__fastcall*)(void* board);
+DuelBookkeepingFn g_orig_duel_bookkeeping;
+
+void __fastcall HookDuelBookkeeping(void* board)
+{
+    SyncPause pause;
+    g_orig_duel_bookkeeping(board);
+}
+
 void* g_save_trampoline;
 void* g_last_online_board;
 
@@ -1088,6 +1130,181 @@ void HideOfflineControls()
     }
 }
 
+// ---- Every turn: the whole board, as the game copies it for Instant Replay and saved games ----
+GAME_CALL void* CopyBoard(void* board)
+{
+    void* copy;
+    __asm {
+        push board
+        mov eax, kCopyBoard
+        call eax
+        mov copy, eax
+    }
+    return copy;
+}
+
+GAME_CALL bool LoadBoardCopy(void* copy, void* board)
+{
+    uint8_t loaded;
+    __asm {
+        push 0
+        mov ecx, copy
+        mov edx, board
+        mov eax, kLoadBoard
+        call eax
+        mov loaded, al
+    }
+    return loaded != 0;
+}
+
+void FreeCopy(void* copy)
+{
+    reinterpret_cast<void(__thiscall*)(void*, int)>((*reinterpret_cast<void***>(copy))[0])(copy, 1);
+}
+
+struct TurnCheckEntry {
+    uint32_t tick, hash, size;
+};
+constexpr int kTurnChecks = 16;
+TurnCheckEntry g_our_checks[kTurnChecks], g_their_checks[kTurnChecks];
+int g_turn_check_state = -1;
+uint32_t g_turn_mismatches, g_turn_matches;
+
+// When they differ, whoever is about to shoot gives the other one their board (it stays as it is under their aim).
+// Both games then load that one at the same point of the stream, on a clean allocator and random numbers, which
+// leaves them the same in everything: a difference lasts one shot at most.
+#pragma pack(push, 1)
+struct BoardHeader {
+    uint32_t arena_start, seed, board_size;
+};
+#pragma pack(pop)
+constexpr int kMaxRepairsInARow = 3;  // still different after this many: something a board can't put right
+bool g_repair_wanted;
+int g_repairs_in_a_row;
+
+void CompareTurnCheck(uint32_t tick)
+{
+    const TurnCheckEntry& ours = g_our_checks[tick % kTurnChecks];
+    const TurnCheckEntry& theirs = g_their_checks[tick % kTurnChecks];
+    if (ours.tick != tick || theirs.tick != tick)
+        return;
+    if (ours.hash == theirs.hash && ours.size == theirs.size) {
+        ++g_turn_matches;
+        g_repair_wanted = false;
+        g_repairs_in_a_row = 0;
+        return;
+    }
+    ++g_turn_mismatches;
+    Log("lockstep: BOARDS DIFFER at tick %u: ours %08X (%u bytes), theirs %08X (%u bytes)", tick, ours.hash, ours.size,
+        theirs.hash, theirs.size);
+    if (g_repairs_in_a_row < kMaxRepairsInARow)
+        g_repair_wanted = true;
+    else
+        g_desync_notice = true;
+}
+
+void AdoptBoard(void* board, void* copy, const std::string& modes, uint32_t seed)
+{
+    g_repair_wanted = false;
+    ++g_repairs_in_a_row;
+    g_mt.Seed(seed);
+    g_crt_state = seed ^ 0x9E3779B9;
+    g_crt_calls = 0;
+    Polled neutral = {};  // (as when a board is built)
+    neutral.x = 400;
+    neutral.y = 300;
+    SavedLocal saved;
+    OverridePolled(nullptr, neutral, saved);
+    bool loaded;
+    {
+        SyncScope sync;
+        loaded = LoadBoardCopy(copy, board);
+        chaos::LoadState(board, modes);
+    }
+    RestorePolled(nullptr, saved);
+    g_desync_reported = false;
+    g_mismatches = 0;
+    g_turn_check_state = -1;  // the next tick compares them again
+    Log("lockstep: tick %u, took one board (%u bytes, loaded %d, repair %d in a row)", g_tick,
+        game::At<uint32_t>(copy, kWriterOffSize), loaded ? 1 : 0, g_repairs_in_a_row);
+    chat::Note("The two games had drifted apart. Fixed!");
+}
+
+void SendBoard(void* board)
+{
+    void* copy = CopyBoard(board);
+    std::string modes = chaos::SaveState(board);
+    BoardHeader h;
+    h.arena_start = static_cast<uint32_t>(arena::BeginDuel(0));
+    h.seed = g_level_seed * 2654435761u + g_tick;
+    h.board_size = game::At<uint32_t>(copy, kWriterOffSize);
+    uint32_t total = static_cast<uint32_t>(sizeof h + h.board_size + modes.size());
+    g_out.push_back(kItemBoard);
+    Put(g_out, total);
+    Put(g_out, h);
+    const auto* data = game::At<const uint8_t*>(copy, kWriterOffData);
+    g_out.insert(g_out.end(), data, data + h.board_size);
+    g_out.insert(g_out.end(), modes.begin(), modes.end());
+    Flush();
+    AdoptBoard(board, copy, modes, h.seed);
+    FreeCopy(copy);
+}
+
+void ReceiveBoard(void* board, const uint8_t* item, uint32_t total)
+{
+    BoardHeader h;
+    memcpy(&h, item, sizeof h);
+    const uint8_t* bytes = item + sizeof h;
+    arena::BeginDuel(h.arena_start);
+    void* copy = CopyBoard(board);  // (a writer to hold the board that came)
+    game::At<uint32_t>(copy, kWriterOffSize) = 0;
+    using WriteFn = void(__thiscall*)(void*, const void*, size_t);
+    reinterpret_cast<WriteFn>((*reinterpret_cast<void***>(copy))[kWriterSlotWrite])(copy, bytes, h.board_size);
+    std::string modes(reinterpret_cast<const char*>(bytes + h.board_size), total - sizeof h - h.board_size);
+    AdoptBoard(board, copy, modes, h.seed);
+    FreeCopy(copy);
+}
+
+void TurnCheckpoint(void* board)
+{
+    int state = LogicState(board);
+    bool turn_began = state == kStateAiming && g_turn_check_state != kStateAiming;
+    g_turn_check_state = state;
+    if (!turn_began)
+        return;
+    void* display = game::At<void*>(board, kBoardOffPowerDisplay);
+    int flash = display ? game::At<int>(display, kDisplayOffFlash) : 0;
+    if (display)
+        game::At<int>(display, kDisplayOffFlash) = 0;
+    void* copy = CopyBoard(board);
+    if (display)
+        game::At<int>(display, kDisplayOffFlash) = flash;
+    uint32_t size = game::At<uint32_t>(copy, kWriterOffSize);
+    const auto* data = game::At<const uint8_t*>(copy, kWriterOffData);
+    uint32_t h = 2166136261u;
+    for (uint32_t i = 0; i < size; ++i)
+        h = (h ^ data[i]) * 16777619u;
+    // And what the next shot will draw on beside the board: the random numbers and the modes.
+    for (uint32_t v : {g_mt.calls, static_cast<uint32_t>(g_mt.index), g_crt_calls, g_crt_state, chaos::StateHash()})
+        h = (h ^ v) * 16777619u;
+    if (DebugEnabled()) {  // what each computer had, for comparing
+        std::string path = ModDir() + "mods\\logs\\board-" + std::to_string(GetCurrentProcessId()) + "-" +
+                           std::to_string(g_level_seed) + "-" + std::to_string(g_tick) + ".bin";
+        if (FILE* f = fopen(path.c_str(), "wb")) {
+            fwrite(data, 1, size, f);
+            fclose(f);
+        }
+    }
+    FreeCopy(copy);
+    Log("lockstep: turn check at tick %u: %u bytes, %08X", g_tick, size, h);
+    g_our_checks[g_tick % kTurnChecks] = {g_tick, h, size};
+    proto::TurnCheck c = {g_tick, h, size};
+    net::Send(proto::kTurnCheck, &c, sizeof c);
+    CompareTurnCheck(g_tick);
+}
+
+// A difference in here alone needn't be one the players can see (the allocator's counters are in it), so it goes in
+// the log; what they're told about is the boards, each turn.
 void CheckHash(uint32_t tick, uint32_t theirs)
 {
     uint32_t ours = StateHash(g_board);
@@ -1099,7 +1316,6 @@ void CheckHash(uint32_t tick, uint32_t theirs)
     g_desync_reported = true;
     Log("lockstep: DESYNC at tick %u: ours %08X theirs %08X (rng calls %u, state %d, player %d)", tick, ours, theirs,
         g_mt.calls, game::At<int>(LogicMgr(g_board), kLogicOffState), CurrentPlayer(g_board));
-    g_desync_notice = true;
     DumpTrace("first mismatch");
     uint32_t t = tick;
     net::Send(proto::kDesync, &t, sizeof t);  // the controller dumps its trace too
@@ -1107,6 +1323,8 @@ void CheckHash(uint32_t tick, uint32_t theirs)
 
 void LocalTick(void* board)
 {
+    if (g_repair_wanted && LogicState(board) == kStateAiming)
+        SendBoard(board);
     EmitPolled(board);
     g_out.push_back(kItemTick);
     Put(g_out, g_tick);
@@ -1114,6 +1332,7 @@ void LocalTick(void* board)
     ++g_tick;
     ++g_stat_ticks;
     RecordTrace();
+    TurnCheckpoint(board);
     g_out.push_back(kItemCheck);
     Put(g_out, g_tick);
     Put(g_out, StateHash(board));
@@ -1186,6 +1405,7 @@ void RemoteTicks(void* board)
             ++g_tick;
             ++g_stat_ticks;
             RecordTrace();
+            TurnCheckpoint(board);
             UpdateControl();
             break;
         }
@@ -1195,6 +1415,18 @@ void RemoteTicks(void* board)
             g_in_pos += 4;
             ApplyPlayNow(p[1], p[2], p[3]);
             break;
+        case kItemBoard: {
+            if (left < 5)
+                return;
+            uint32_t total;
+            memcpy(&total, p + 1, 4);
+            if (left < 5 + total)
+                return;
+            std::vector<uint8_t> item(p + 5, p + 5 + total);
+            g_in_pos += 5 + total;
+            ReceiveBoard(board, item.data(), total);
+            break;
+        }
         case kItemCheck: {
             if (left < 9)
                 return;
@@ -1245,6 +1477,14 @@ int CountTicks(const uint8_t* p, size_t n)
         case kItemTick: i += 5; ++ticks; break;
         case kItemPlayNow: i += 4; break;
         case kItemCheck: i += 9; break;
+        case kItemBoard: {
+            if (i + 5 > n)
+                return ticks;
+            uint32_t total;
+            memcpy(&total, p + i + 1, 4);
+            i += 5 + total;
+            break;
+        }
         default: return ticks;
         }
     }
@@ -1370,6 +1610,8 @@ void Install()
         HookVtable(kOptionsButtonVtable, 2, reinterpret_cast<void*>(HookOptionsButton)));
     g_pause_trampoline = HookInline(kBoardSetPaused, 7, reinterpret_cast<void*>(PauseHook));
     g_save_trampoline = HookInline(kBoardSaveGame, 5, reinterpret_cast<void*>(SaveHook));
+    g_orig_duel_bookkeeping = reinterpret_cast<DuelBookkeepingFn>(
+        HookCall(kDuelBookkeepingCall, reinterpret_cast<void*>(HookDuelBookkeeping)));
     g_orig_play_level_music = reinterpret_cast<PlayLevelMusicFn>(
         HookInline(kPlayLevelMusic, 6, reinterpret_cast<void*>(HookPlayLevelMusic)));
     g_orig_set_curve = reinterpret_cast<SetCurveFn>(
@@ -1446,6 +1688,12 @@ void Begin(void* board, bool is_host, const char* host_name, const char* client_
     g_sent_any = false;
     g_desync_reported = false;
     g_mismatches = 0;
+    g_turn_check_state = -1;
+    g_turn_mismatches = g_turn_matches = 0;
+    g_repair_wanted = false;
+    g_repairs_in_a_row = 0;
+    memset(g_our_checks, 0xFF, sizeof g_our_checks);
+    memset(g_their_checks, 0xFF, sizeof g_their_checks);
     g_pointer_in_sync = 0;
     g_host_name = host_name;
     g_client_name = client_name;
@@ -1584,6 +1832,15 @@ bool HandleMessage(const net::Message& m)
             return true;
         g_in.insert(g_in.end(), m.data.begin(), m.data.end());
         g_in_ticks += CountTicks(m.data.data(), m.data.size());
+        return true;
+    }
+    if (m.type == proto::kTurnCheck) {
+        proto::TurnCheck c;
+        if (m.data.size() >= sizeof c) {
+            memcpy(&c, m.data.data(), sizeof c);
+            g_their_checks[c.tick % kTurnChecks] = {c.tick, c.hash, c.size};
+            CompareTurnCheck(c.tick);
+        }
         return true;
     }
     if (m.type == proto::kDesync) {

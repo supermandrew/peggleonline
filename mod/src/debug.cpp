@@ -20,6 +20,7 @@
 #include "lockstep.h"
 #include "log.h"
 #include "online.h"
+#include "packs.h"
 #include "pad.h"
 #include "padhid.h"
 #include "padmenu.h"
@@ -256,6 +257,33 @@ std::string RunCommand(const std::string& line, std::function<void()>& later)
         }
         return found.empty() ? "none" : "offsets:" + found;
     }
+    if (cmd == "packthrottle") {  // packthrottle <ms>: a pause after each piece of a level pack, to watch it go
+        int ms = 0;
+        in >> ms;
+        packs::SetThrottle(ms);
+        return "ok";
+    }
+    if (cmd == "packcorrupt") {  // packcorrupt <0|1>: damage level packs on their way out
+        int on = 0;
+        in >> on;
+        packs::SetCorrupt(on != 0);
+        return "ok";
+    }
+    if (cmd == "profilename") {  // profilename <name>: the player's real name (two copies here share a profile)
+        std::string name;
+        std::getline(in >> std::ws, name);
+        void* profile = game::App() ? game::At<void*>(game::App(), game::kAppOffProfile) : nullptr;
+        if (!profile)
+            return "error: no profile";
+        game::AssignString(static_cast<char*>(profile) + 4, name.c_str());
+        return "ok";
+    }
+    if (cmd == "hidelevels") {  // hidelevels <stage>: tell the opponent this game stops before that stage
+        int stage = -1;
+        in >> stage;
+        online::HideLevelsFromStage(stage);
+        return "ok";
+    }
     if (cmd == "setname") {
         std::string name;
         std::getline(in >> std::ws, name);
@@ -319,6 +347,23 @@ std::string RunCommand(const std::string& line, std::function<void()>& later)
             out += (i ? " " : "") + std::string(num);
         }
         return out;
+    }
+    if (cmd == "poke") {  // poke <app|board|logic|0x address> <hex offset> <int>: change a game object, for tests
+        std::string base;
+        int off = 0, value = 0;
+        in >> base >> std::hex >> off >> std::dec >> value;
+        void* app = game::App();
+        void* board = app ? game::At<void*>(app, game::kAppOffBoard) : nullptr;
+        void* p = base.rfind("0x", 0) == 0 ? reinterpret_cast<void*>(strtoul(base.c_str(), nullptr, 16))
+                : base == "app" ? app
+                : base == "board" ? board
+                : base == "logic" && board ? game::At<void*>(board, 0x720)
+                : base == "profile" && app ? game::At<void*>(app, game::kAppOffProfile)
+                : nullptr;
+        if (!p)
+            return "error: no " + base;
+        game::At<int>(p, off) = value;
+        return "ok";
     }
     if (cmd == "objs") {  // objs [id]: the board's objects but pegs, or those with that id from the level
         std::string id;

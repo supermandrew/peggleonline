@@ -203,23 +203,80 @@ void SetResult(const Result& r)
     g_result = r;
 }
 
+std::string Trimmed(const std::string& s)
+{
+    size_t first = s.find_first_not_of(" \t\r\n");
+    size_t last = s.find_last_not_of(" \t\r\n");
+    return first == std::string::npos ? std::string() : s.substr(first, last - first + 1);
+}
+
+// The address the rest of the internet sees this computer at, from a public service, when the router won't say.
+std::string PublicAddress()
+{
+    for (const char* service : {"http://api.ipify.org/", "http://checkip.amazonaws.com/"}) {
+        std::string body;
+        if (Http(service, "GET", "", "", body) != 200)
+            continue;
+        std::string ip = Trimmed(body);
+        in_addr parsed;
+        if (inet_pton(AF_INET, ip.c_str(), &parsed) == 1)
+            return ip;
+    }
+    return {};
+}
+
+bool Connects(const std::string& ip, uint16_t port)
+{
+    sockaddr_in to = {};
+    to.sin_family = AF_INET;
+    to.sin_port = htons(port);
+    if (inet_pton(AF_INET, ip.c_str(), &to.sin_addr) != 1)
+        return false;
+    SOCKET s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    u_long nonblocking = 1;
+    ioctlsocket(s, FIONBIO, &nonblocking);
+    connect(s, reinterpret_cast<sockaddr*>(&to), sizeof to);
+    fd_set writable, failed;
+    FD_ZERO(&writable);
+    FD_SET(s, &writable);
+    FD_ZERO(&failed);
+    FD_SET(s, &failed);
+    timeval wait = {3, 0};
+    bool connected = select(0, nullptr, &writable, &failed, &wait) == 1 && FD_ISSET(s, &writable);
+    closesocket(s);
+    return connected;
+}
+
+// The router didn't open the port, but it may be open all the same, forwarded by hand. A connection to the public
+// address that comes back here proves it. (Not every router can loop one back, so none proves nothing.)
+void FinishWithoutMapping(Result& r, uint16_t port)
+{
+    if (r.external_ip.empty())
+        r.external_ip = PublicAddress();
+    if (!r.external_ip.empty())
+        r.reachable = Connects(r.external_ip, port);
+    Log("upnp: public address %s, port %u reachable: %d", r.external_ip.empty() ? "unknown" : r.external_ip.c_str(),
+        port, r.reachable ? 1 : 0);
+    r.done = true;
+    SetResult(r);
+}
+
 void MapThread(uint16_t port)
 {
     Result r;
     r.local_ip = DefaultRouteIp();
     if (r.local_ip.empty()) {
         r.done = true;
-        r.error = "This computer does not seem to be connected to a network.";
+        r.error = "This computer doesn't seem to be connected to a network.";
         SetResult(r);
         return;
     }
     std::set<std::string> locations = Discover(r.local_ip);
     std::string port_text = std::to_string(port);
     if (locations.empty()) {
-        r.done = true;
         r.error = "No router answered the request to open port " + port_text + " (UPnP may be turned off).";
-        SetResult(r);
         Log("upnp: no gateway answered discovery");
+        FinishWithoutMapping(r, port);
         return;
     }
     std::string last_error =
@@ -280,9 +337,8 @@ void MapThread(uint16_t port)
             }
         }
     }
-    r.done = true;
     r.error = last_error;
-    SetResult(r);
+    FinishWithoutMapping(r, port);
 }
 
 }  // namespace
