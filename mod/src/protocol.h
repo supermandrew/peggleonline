@@ -4,7 +4,7 @@
 
 namespace proto {
 
-constexpr uint32_t kVersion = 12;
+constexpr uint32_t kVersion = 13;
 
 enum Type : uint8_t {
     kHello = 1,    // Hello
@@ -18,7 +18,7 @@ enum Type : uint8_t {
     kChat = 15,      // Chat: a player said one of the set phrases (chat.cpp)
     kDuelOptions = 16,  // DuelOptions: the host's boxes on the Two Player Selection, for the joiner to see
     kLevelList = 17,    // the ids of every level this game has, a line each: what can be played together
-    kTurnCheck = 18,    // TurnCheck: what the whole board came to as a turn began
+    kTurnReply = 18,    // TurnReply: the answer to a turn check in the stream
     kPackOffer = 19,    // PackOffer: the host picked a level the joiner lacks, in this level pack
     kPackReply = 20,    // u8: the joiner wants it (1) or doesn't, or no longer does (0)
     kPackData = 21,     // u32 offset, then that part of the pack
@@ -55,10 +55,15 @@ struct PackEnd {
     uint32_t crc;
 };
 
-struct TurnCheck {
-    uint32_t tick;
-    uint32_t hash;  // of the game's own copy of the whole board
-    uint32_t size;
+enum TurnAnswer : uint8_t {
+    kTurnSame = 0,       // the two boards are the same
+    kTurnSendBoard = 1,  // they differ: send yours, I'm waiting for it
+    kTurnGivenUp = 2,    // they differ, and a board hasn't helped: carrying on as we are
+};
+
+struct TurnReply {
+    uint32_t tick;   // of the check this answers
+    uint8_t answer;  // TurnAnswer
 };
 
 struct Select {

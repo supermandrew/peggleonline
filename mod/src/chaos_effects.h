@@ -41,6 +41,12 @@ bool DebugRedAt(void* board, float x, float y, int kind);
 // Mirage's way in: as the turn passes the board goes black, the fakes appear in the dark, and it lights up again.
 void StartBlackout(void* board);
 void CancelBlackout();
+struct BlackoutState {  // where it has got to, for a repair online (it's timed by the board's steps)
+    int32_t phase;
+    uint32_t steps;
+};
+BlackoutState GetBlackout();
+void SetBlackout(void* board, const BlackoutState& b);
 
 // Instant Replay. The game records each shot as it's fired (a copy of the whole board, then where the balls went)
 // and a replay loads that copy and plays it again, the balls put back where they were each step. What the effects

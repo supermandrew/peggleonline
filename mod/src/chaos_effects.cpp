@@ -3451,6 +3451,15 @@ void CancelBlackout()
     g_blackout_board = nullptr;
 }
 
+BlackoutState GetBlackout() { return {g_blackout, g_blackout_steps}; }
+
+void SetBlackout(void* board, const BlackoutState& b)
+{
+    g_blackout = b.phase;
+    g_blackout_steps = b.steps;
+    g_blackout_board = b.phase ? board : nullptr;
+}
+
 void CaptureShot(void* board, ShotState& s)
 {
     memset(&s, 0, sizeof s);

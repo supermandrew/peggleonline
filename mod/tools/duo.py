@@ -22,6 +22,11 @@ windows have focus and wherever the real mouse is.
   python duo.py netlevels        a level the joiner doesn't have: refused with a message, Random stays within both
   python duo.py netrepair        one game pushed off: found at the next turn, both take one board, pictures identical
   python duo.py netmodes         the same in the middle of Chaos Mode and Red Peg Mode, with their effects in place
+  python duo.py netshots [shooter|other]  a shot ending sooner on one game alone, each way round with each player
+                                 shooting, a turn passing sooner on one, one game answering late, the same with the
+                                 duel's last shot: both take the board of the player who shot, none of it stalls
+                                 (shooter or other: just that one case)
+  python duo.py netmirage        the board repaired as the turn passes, with Mirage due next: it still comes, the same
   python duo.py netcallers       callers on the hosting port that aren't an opponent don't end the hosting
   python duo.py netpack          B has no level pack: says no, then yes; it comes over, the game takes it, a duel on it
   python duo.py netpackstops     either player stopping a pack part way, one damaged on the way: nothing left behind
@@ -88,6 +93,7 @@ import random
 import re
 import shutil
 import socket
+import struct
 import subprocess
 import sys
 import time
@@ -585,9 +591,8 @@ def autoplay(shots, seed=1):
     return 'shots'
 
 
-def synced(name):
-    """Freeze both games at the same tick, screenshot both and count the pixels that differ."""
-    from PIL import ImageChops
+def hold_both():
+    """Freeze both games at the same tick, and return it. ('hold' on each lets them go again.)"""
     for _ in range(5):
         ticks = [int(send(k, 'tick')) for k in 'AB']
         target = max(ticks) + 60
@@ -602,6 +607,13 @@ def synced(name):
         wait(lambda: all(int(send(k, 'tick')) == target for k in 'AB'), 15, '')
     except StepFailed:
         raise StepFailed(f'the games did not reach tick {target}: ' + ' / '.join(send(k, 'state') for k in 'AB'))
+    return target
+
+
+def synced(name):
+    """Freeze both games at the same tick, screenshot both and count the pixels that differ."""
+    from PIL import ImageChops
+    target = hold_both()
     a, b = frame('A', name), frame('B', name)
     for k in 'AB':
         send(k, 'hold')
@@ -947,6 +959,250 @@ def net_repair_modes():
     time.sleep(3)
     boards_match(since, 1)
     ok(f"repairs under {', '.join(CHAOS_EFFECTS[e] for e in repaired)}: the same on both after each")
+
+
+def other_copy(k):
+    return 'B' if k == 'A' else 'A'
+
+
+def both_states():
+    return ' / '.join(f"{k}: {send(k, 'state')}" for k in 'AB')
+
+
+def wait_or_show(check, timeout, what):
+    """wait(), and if it fails the message says where both games were."""
+    try:
+        return wait(check, timeout, what)
+    except StepFailed:
+        raise StepFailed(f'{what}: {both_states()}') from None
+
+
+def ball_in_play(k):
+    """Copy k's ball, if one is in flight (Board+0x76C lists them in {next, prev, object} nodes)."""
+    head = hex(int(send(k, 'peek board 770')) & 0xFFFFFFFF)
+    node = hex(int(send(k, f'peek {head} 0')) & 0xFFFFFFFF)
+    return None if node == head else hex(int(send(k, f'peek {node} 8')) & 0xFFFFFFFF)
+
+
+def take_ball(k):
+    """The ball leaves the board on copy k alone, as if it had bounced another way: the shot ends sooner there."""
+    ball = ball_in_play(k)
+    if not ball:
+        raise StepFailed(f'copy {k} has no ball in flight: {both_states()}')
+    send(k, f"poke {ball} f0 {struct.unpack('<i', struct.pack('<f', 700.0))[0]}")
+
+
+def scores(k):
+    return send(k, f"peek {hex(int(send(k, 'peek board 720')) & 0xFFFFFFFF)} 200 2")
+
+
+def fire(seed):
+    """Whoever is aiming shoots, up the board for a long shot. Returns which copy that was."""
+    rnd = random.Random(seed)
+    wait_or_show(can_shoot, 40, 'nobody can shoot')
+    time.sleep(1)                                            # (a click during the turn's banner is no shot)
+    k = shooter()
+    x, y = rnd.randint(150, 650), rnd.randint(220, 380)
+    send(k, f'move {x} {y}')
+    time.sleep(0.3)
+    click(k, x, y)
+    wait_or_show(lambda: state(k).get('state') != '1', 5, f'copy {k} did not shoot')
+    return k
+
+
+def one_board_again(since, name):
+    """Both games took the one board and go on from it, the same to the pixel and in the scores."""
+    for k in 'AB':
+        wait_or_show(lambda: any('took one board' in line for line in log_lines(k)[since[k]:]), 30,
+                     f'copy {k} never took the one board')
+    wait_or_show(lambda: can_shoot() or any(state(k).get('enddlg') == '1' for k in 'AB'), 40,
+                 'the duel did not go on after the repair')
+    time.sleep(1)
+    synced(name)
+    if scores('A') != scores('B'):
+        raise StepFailed(f"the scores still differ: {scores('A')} and {scores('B')}")
+
+
+def shot_ends_differently(drop, seed, name):
+    """drop: 'shooter' or 'other', the game whose ball goes. The player who shot is the one to believe."""
+    since = mark()
+    k = fire(seed)
+    target = k if drop == 'shooter' else other_copy(k)
+    wait_or_show(lambda: ball_in_play(target), 5, f'copy {target} never had the ball')
+    take_ball(target)
+    print(f'  {k} shot; the ball left the board on {target} alone', flush=True)
+    one_board_again(since, name)
+    ok(f'{name}: over sooner on {drop} ({target}), {k} shooting: one board, and on it goes')
+
+
+def turn_passes_differently(drop, seed, name):
+    """The shot ended alike, then the score takes much longer to count up on one game alone: the turn passes later."""
+    since = mark()
+    k = fire(seed)
+    target = k if drop == 'shooter' else other_copy(k)
+    wait_or_show(lambda: state(target).get('state') == '6', 40, f"copy {target}'s shot never ended")
+    logic = hex(int(send(target, 'peek board 720')) & 0xFFFFFFFF)
+    send(target, f"poke {logic} 200 {int(send(target, f'peek {logic} 200')) + 5000000}")
+    one_board_again(since, name)
+    ok(f"{name}: the turn passing later on {drop} ({target}): one board, and on it goes")
+
+
+def turn_waits_for_answer(seed):
+    """The other game falls behind: the turn doesn't pass until it has said its board is the same."""
+    k = fire(seed)
+    o = other_copy(k)
+    wait_or_show(lambda: ball_in_play(o), 5, f'copy {o} never had the ball')
+    send(o, f"hold {int(send(o, 'tick')) + 1}")
+    wait_or_show(lambda: state(k).get('state') == '6', 40, f"copy {k}'s shot never ended")
+    time.sleep(3)
+    before = state(k)
+    time.sleep(1)
+    after = state(k)
+    if after.get('state') != '6' or before.get('tick') != after.get('tick'):
+        raise StepFailed(f'{k} went on without an answer: {before} then {after}')
+    since = mark()
+    send(o, 'hold')
+    wait_or_show(can_shoot, 30, 'the duel did not go on once the other game caught up')
+    if logged(k, 'BOARDS DIFFER', since) or logged(o, 'BOARDS DIFFER', since):
+        raise StepFailed('waiting for an answer made the boards differ')
+    ok(f'{k} waited at the end of the turn for {o} to catch up')
+
+
+def last_ball(wanted, seed):
+    """The next shot is the duel's last and it's copy wanted's: both games change at the same tick."""
+    wait_or_show(can_shoot, 40, 'nobody can shoot')
+    if shooter() != wanted:
+        autoplay(1, seed=seed)
+        wait_or_show(lambda: shooter() == wanted, 40, f"it never came to {wanted}'s turn")
+    hold_both()
+    player = int(state(wanted)['player'])
+    for k in 'AB':
+        send(k, f'poke logic 208 {1 - player}')
+        send(k, f'poke logic 20c {player}')
+    for k in 'AB':
+        send(k, 'hold')
+
+
+def last_shot_ends_differently(wanted, drop, seed, name):
+    last_ball(wanted, seed)
+    since = mark()
+    k = fire(seed)
+    target = k if drop == 'shooter' else other_copy(k)
+    wait_or_show(lambda: ball_in_play(target), 5, f'copy {target} never had the ball')
+    take_ball(target)
+    print(f"  {k} shot the duel's last ball; it left the board on {target} alone", flush=True)
+    for c in 'AB':
+        wait_or_show(lambda: any('took one board' in line for line in log_lines(c)[since[c]:]), 30,
+                     f'copy {c} never took the one board')
+    if autoplay(6, seed=seed) != 'results':                  # (a catch in the bucket is one more ball)
+        raise StepFailed('the duel did not reach the results screen')
+    wait_or_show(lambda: all(state(c).get('enddlg') == '1' for c in 'AB'), 15, 'the results are not up on both')
+    results_settled()
+    synced(name)
+    if scores('A') != scores('B'):
+        raise StepFailed(f"the duel ended with different scores: {scores('A')} and {scores('B')}")
+    ok(f"{name}: the duel's last shot over sooner on {drop} ({target}), {k} shooting: the same results")
+    since = mark()
+    click('A', 513, 413)                                     # host: Replay Level
+    wait_log('A', 'results button 1001 pressed (host decides)', since, 5)
+    wait_or_show(lambda: all(state(c).get('seldlg') == '1' for c in 'AB'), 20, 'Replay Level brought no selection back')
+    time.sleep(2)
+    duel()
+
+
+def net_shots(which=None):
+    """The game in control says when a shot and a turn are over, and the other game goes by that, whatever its own
+    board says. A difference that changes how long a shot lasts is the one a bug would make, and it used to leave both
+    games waiting for each other for good, or playing out of step with nothing compared."""
+    connect()
+    time.sleep(2)
+    duel()
+    if which:
+        shot_ends_differently(which, 51, f'shot_{which}')
+        return
+    for i, drop in enumerate(('shooter', 'shooter', 'other', 'other')):
+        shot_ends_differently(drop, 51 + i, f'shot_{i}')
+    for i, drop in enumerate(('shooter', 'other')):
+        turn_passes_differently(drop, 55 + i, f'turn_{i}')
+    turn_waits_for_answer(57)
+    time.sleep(2)                                            # (a click during the turn's banner is no shot)
+    since = mark()
+    autoplay(2, seed=58)
+    wait_or_show(can_shoot, 40, 'the turn after two plain shots never came')
+    boards_match(since, 2)
+    for i, (k, drop) in enumerate((('A', 'shooter'), ('A', 'other'), ('B', 'shooter'), ('B', 'other'))):
+        last_shot_ends_differently(k, drop, 60 + i, f'last_{i}')
+    wait_or_show(can_shoot, 40, 'nobody can shoot in the last duel')
+    time.sleep(2)
+    since = mark()
+    autoplay(3, seed=65)
+    wait_or_show(can_shoot, 40, 'the turn after the last plain shots never came')
+    boards_match(since, 2)
+    for k in 'AB':
+        if logged(k, 'stream tick', {'A': 0, 'B': 0}):
+            raise StepFailed(f"copy {k}: {logged(k, 'stream tick', {'A': 0, 'B': 0})[0]}")
+    ok('whatever the shot did, the two games never fell out of step')
+
+
+def net_repair_mirage():
+    """What's decided as a shot ends is carried by a repair: the red peg is hit and the ball goes on the shooter's game
+    alone, so the other game hasn't decided anything for the next turn yet. Mirage comes all the same, on both."""
+    connect()
+    time.sleep(2)
+    x, y, on = red_box('A')
+    if not on:
+        click('A', x, y)
+    wait(lambda: red_box('A')[2] and red_box('B')[2], 5, "the joiner's box did not follow the host's")
+    duel()
+    wait(lambda: all(chaos_state(c)['running'] == '1' for c in 'AB'), 30, 'the online duel never began')
+    time.sleep(1)
+    for attempt in range(6):
+        k = wait(shooter, 60, 'no one gets to shoot')
+        time.sleep(1)
+        for c in 'AB':
+            send(c, 'chaos rednext 16')
+        at = max(int(send(c, 'tick')) for c in 'AB') + 50
+        since = mark()
+        for c in 'AB':
+            send(c, f'chaos redat 400 160 {at}')
+        for c in 'AB':
+            wait_log(c, 'the red peg is moved', since, 15, f'copy {c}: the red peg was not moved')
+        rx, ry = fx_point(chaos_fx(k), 'redat')
+        send(k, f'move {rx} {ry}')
+        time.sleep(0.4)
+        click(k, rx, ry)
+        try:
+            wait_log(k, 'hit the red peg', since, 15, '')
+        except StepFailed:
+            print(f'  copy {k} missed the red peg: again', flush=True)
+            wait(lambda: shooter() not in (None, k), 60, 'the turn never passed')
+            continue
+        if ball_in_play(k):
+            take_ball(k)
+            break
+        print(f"  copy {k}'s ball was gone already: again", flush=True)
+        wait(lambda: shooter() not in (None, k), 60, 'the turn never passed')
+    else:
+        raise StepFailed('six shots at the red peg and no ball left to take')
+    print(f'  {k} hit the red peg; the ball left the board on {k} alone', flush=True)
+    for c in 'AB':
+        wait_or_show(lambda: any('took one board' in line for line in log_lines(c)[since[c]:]), 30,
+                     f'copy {c} never took the one board')
+    wait_or_show(lambda: all(chaos_state(c)['redeffect'] == '16' for c in 'AB'), 40, 'Mirage did not begin on both')
+    fa, fb = chaos_fx('A'), chaos_fx('B')
+    if fa['fakelist'] != fb['fakelist']:
+        raise StepFailed(f"Mirage: different fake pegs: A {fa['fakelist']}, B {fb['fakelist']}")
+    wait_or_show(can_shoot, 40, 'the victim never got to shoot')
+    time.sleep(2)
+    synced('repair_mirage')
+    for c in 'AB':
+        if logged(c, 'repair 2 in a row', since):
+            raise StepFailed(f'copy {c} needed a second board: the first left the modes different')
+    since = mark()
+    autoplay(2, seed=71)
+    wait_or_show(can_shoot, 40, 'the turn after two more shots never came')
+    boards_match(since, 2)
+    ok('Mirage came on both after a repair as the turn passed')
 
 
 def net_callers():
@@ -3590,16 +3846,21 @@ def main(argv):
             padscenario()
         elif cmd == 'padreports':
             pad_reports()
-        elif cmd in ('netfresh', 'netmenu', 'netend', 'netlevels', 'netrepair', 'netmodes', 'netcallers'):
+        elif cmd in ('netfresh', 'netmenu', 'netend', 'netlevels', 'netrepair', 'netmodes', 'netmirage', 'netcallers'):
             start()
             {'netfresh': net_fresh, 'netmenu': net_menu, 'netend': net_end, 'netlevels': net_levels,
-             'netrepair': net_repair, 'netmodes': net_repair_modes, 'netcallers': net_callers}[cmd]()
+             'netrepair': net_repair, 'netmodes': net_repair_modes, 'netmirage': net_repair_mirage,
+             'netcallers': net_callers}[cmd]()
+        elif cmd == 'netshots':
+            start()
+            net_shots(argv[1] if len(argv) > 1 else None)
         elif cmd == 'netpack':
             net_pack()
         elif cmd == 'netpackstops':
             net_pack_stops()
         elif cmd == 'net':
-            for test in (net_fresh, net_menu, net_levels, net_repair, net_repair_modes, net_end, net_callers):
+            for test in (net_fresh, net_menu, net_levels, net_repair, net_repair_modes, net_shots, net_repair_mirage,
+                         net_end, net_callers):
                 start()
                 test()
             net_pack()

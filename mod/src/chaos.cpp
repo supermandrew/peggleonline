@@ -606,25 +606,34 @@ void BoardReloaded(void* board)
         g_duel.last_state = game::At<int>(lm, kLogicOffState);  // (no turn begins or ends by a reload)
 }
 
+// Beside the board, for a repair online. It can come as the turn passes, so what's been decided for the next turn is
+// in it, and how far Mirage's blackout has got.
 std::string SaveState(void* board)
 {
     ShotState shot;
     CaptureShot(board, shot);
+    BlackoutState blackout = GetBlackout();
     std::string saved(reinterpret_cast<const char*>(&shot), sizeof shot);
     saved.append(reinterpret_cast<const char*>(&g_duel), sizeof g_duel);
+    saved.append(reinterpret_cast<const char*>(&g_next), sizeof g_next);
+    saved.append(reinterpret_cast<const char*>(&blackout), sizeof blackout);
     return saved;
 }
 
 void LoadState(void* board, const std::string& saved)
 {
-    if (saved.size() != sizeof(ShotState) + sizeof(Duel))
-        return;
     ShotState shot;
-    memcpy(&shot, saved.data(), sizeof shot);
-    memcpy(&g_duel, saved.data() + sizeof shot, sizeof g_duel);
+    BlackoutState blackout;
+    if (saved.size() != sizeof shot + sizeof g_duel + sizeof g_next + sizeof blackout)
+        return;
+    const char* p = saved.data();
+    memcpy(&shot, p, sizeof shot);
+    memcpy(&g_duel, p += sizeof shot, sizeof g_duel);
+    memcpy(&g_next, p += sizeof g_duel, sizeof g_next);
+    memcpy(&blackout, p + sizeof g_next, sizeof blackout);
     g_duel.board = board;
-    g_next = NextTurn();
     ApplyShot(board, shot);
+    SetBlackout(board, blackout);
     BoardReloaded(board);
 }
 
@@ -737,6 +746,10 @@ uint32_t StateHash()
     mix(static_cast<uint32_t>(g_duel.red_victim));
     mix(static_cast<uint32_t>(g_duel.red_effect));
     mix(g_duel.red_ticks);
+    mix(g_next.ready);
+    mix(g_next.new_round);
+    mix(static_cast<uint32_t>(g_next.effect));
+    mix(static_cast<uint32_t>(g_next.red));
     mix(g_rng);
     mix(EffectHash());
     return h;

@@ -32,10 +32,13 @@ constexpr int kSlotUpdate = 22;
 constexpr int kAppOffWidgetManager = 0x320;
 constexpr int kBoardOffLogic = 0x720;
 constexpr int kLogicOffState = 0x04;
+constexpr int kLogicOffStateSteps = 0x08;  // logic steps run in the current state
 constexpr int kLogicOffCurrentPlayer = 0x1AC;
 constexpr int kLogicOffBalls = 0x208;  // int[2]
-constexpr int kStateOver = 5, kStateIntro = 8, kStateSelection = 9;  // also 2/3 ball in play, 6 turn over
-constexpr int kStateAiming = 1;
+constexpr int kStateOver = 5, kStateIntro = 8, kStateSelection = 9;  // also 2/3 ball in play
+constexpr int kStateAiming = 1, kStateTurnPassing = 6;  // every shot comes through 6, on to the next turn or the results
+// The turn passes 150 logic steps into state 6 at the earliest (0x4763D0), and fast-forward runs 8 of them a tick.
+constexpr int kTurnPassingWaitSteps = 150 - 2 * 8;
 constexpr uintptr_t kDuelBookkeepingCall = 0x46BEC7;  // the duel ends: 0x40A440, ECX board
 constexpr uintptr_t kCopyBoard = 0x405D00;  // stdcall(board) -> a new DataWriter holding all of the board
 constexpr uintptr_t kLoadBoard = 0x405DB0;  // ECX DataWriter, EDX board, stdcall(bool with the shot's inputs) -> AL
@@ -528,6 +531,8 @@ enum ItemKind : uint8_t {
                        // the selection dialog
     kItemCheck = 5,    // u32 tick, u32 hash: state fingerprint after that tick
     kItemBoard = 6,    // u32 size, BoardHeader, the board, the modes' state: both games take this board, right here
+    kItemTurn = 7,     // TurnCheck: what the whole board came to as a shot ended or a turn began
+    kItemControl = 8,  // u32 tick: the one reading this is in control from here on
 };
 
 bool g_active;
@@ -602,6 +607,12 @@ void* LogicMgr(void* board) { return game::At<void*>(board, kBoardOffLogic); }
 int CurrentPlayer(void* board) { return game::At<int>(LogicMgr(board), kLogicOffCurrentPlayer); }
 int LogicState(void* board) { return game::At<int>(LogicMgr(board), kLogicOffState); }
 
+// A load leaves the vectors of what outlives it as big as they had grown (LogicMgr+0xC0, its ball records at +0xE0, the
+// physics manager's lists), and those aren't the same once a shot has gone differently on the two computers. So after a
+// repair the two games ask for memory at different moments, for good, and their counters are no longer compared. It
+// changes nothing: addresses only matter in the pegs' sets, and a load builds those in the same order on both.
+bool g_allocators_apart;
+
 uint32_t StateHash(void* board)
 {
     void* lm = LogicMgr(board);
@@ -620,10 +631,12 @@ uint32_t StateHash(void* board)
     mix(game::At<uint32_t>(lm, kLogicOffCurrentPlayer));
     mix(game::At<uint32_t>(lm, kLogicOffBalls));
     mix(game::At<uint32_t>(lm, kLogicOffBalls + 4));
-    arena::Stats a = arena::GetStats();  // a different allocation sequence soon means different peg order
-    mix(static_cast<uint32_t>(a.allocated));
-    mix(static_cast<uint32_t>(a.reused));
-    mix(static_cast<uint32_t>(a.used_to - a.start));
+    if (!g_allocators_apart) {
+        arena::Stats a = arena::GetStats();  // a different allocation sequence soon means different peg order
+        mix(static_cast<uint32_t>(a.allocated));
+        mix(static_cast<uint32_t>(a.reused));
+        mix(static_cast<uint32_t>(a.used_to - a.start));
+    }
     mix(chaos::StateHash());
     return h;
 }
@@ -643,21 +656,31 @@ void TraceState()
     g_last_sel = sel;
 }
 
-// Decided from synchronized state only, so both games switch at the same point in the stream. (Dialogs open
-// inside the simulation but close on each computer's own clock, while they slide away.)
+// Only the game in control decides, from synchronized state, and it says so in the stream: the other game takes over
+// at that very point, whatever its own board says. Were each to go by its own board, a board that had gone another way
+// would leave one waiting for the other for good, or both running. (Not from dialogs: they open inside the simulation
+// but close on each computer's own clock, while they slide away.)
 void UpdateControl()
 {
     TraceState();
+    if (!g_local_control)
+        return;
     int st = LogicState(g_board);  // the host runs everything between duels: intro, selection, results
     bool host_controls = !g_duel_started || st == kStateIntro || st == kStateSelection || st == kStateOver ||
                          CurrentPlayer(g_board) == 0;
-    bool local = host_controls == g_is_host;
-    if (local != g_local_control) {
-        Flush();
-        g_local_control = local;
-        Log("lockstep: tick %u, %s in control (player %d's turn)", g_tick, local ? "we are" : "opponent is",
-            CurrentPlayer(g_board) + 1);
-    }
+    if (host_controls == g_is_host)
+        return;
+    g_local_control = false;
+    g_out.push_back(kItemControl);
+    Put(g_out, g_tick);
+    Flush();
+    Log("lockstep: tick %u, opponent is in control (player %d's turn)", g_tick, CurrentPlayer(g_board) + 1);
+}
+
+void TakeControl()  // (a tick runs before this game can hand back, so boards that disagree still move on)
+{
+    g_local_control = true;
+    Log("lockstep: tick %u, we are in control (player %d's turn)", g_tick, CurrentPlayer(g_board) + 1);
 }
 
 // ---- Calling the board's original methods ----
@@ -1130,7 +1153,7 @@ void HideOfflineControls()
     }
 }
 
-// ---- Every turn: the whole board, as the game copies it for Instant Replay and saved games ----
+// ---- Every shot and turn: the whole board, as the game copies it for Instant Replay and saved games ----
 GAME_CALL void* CopyBoard(void* board)
 {
     void* copy;
@@ -1162,51 +1185,81 @@ void FreeCopy(void* copy)
     reinterpret_cast<void(__thiscall*)(void*, int)>((*reinterpret_cast<void***>(copy))[0])(copy, 1);
 }
 
-struct TurnCheckEntry {
+// As a shot ends and as the next turn begins the game in control says what its board came to (kItemTurn), and the other
+// game compares at that same point of the stream. Every shot comes through the turn passing, so that game can't get
+// past the end of a shot of its own: if its ball went another way and its shot is over first, it stops there until the
+// stream gets that far, and never runs on into a turn of its own or the results.
+struct TurnCheck {
     uint32_t tick, hash, size;
 };
-constexpr int kTurnChecks = 16;
-TurnCheckEntry g_our_checks[kTurnChecks], g_their_checks[kTurnChecks];
+TurnCheck g_our_check;  // what this game's board came to at its latest check
 int g_turn_check_state = -1;
 uint32_t g_turn_mismatches, g_turn_matches;
+bool g_at_checkpoint;       // following, and here before the stream: what it brings until then doesn't apply
+bool g_unanswered;          // in control, and the other game hasn't answered this check yet
+uint32_t g_unanswered_tick;
 
-// When they differ, whoever is about to shoot gives the other one their board (it stays as it is under their aim).
-// Both games then load that one at the same point of the stream, on a clean allocator and random numbers, which
-// leaves them the same in everything: a difference lasts one shot at most.
+// When they differ the other game asks for the board of the game in control, whose player took the shot, so the shot
+// as they saw it stands, score and all. Both games load that board at the same point of the stream, with the same
+// random numbers, tick and clock.
 #pragma pack(push, 1)
 struct BoardHeader {
-    uint32_t arena_start, seed, board_size;
+    uint32_t arena_start, seed, board_size, tick;
 };
 #pragma pack(pop)
 constexpr int kMaxRepairsInARow = 3;  // still different after this many: something a board can't put right
-bool g_repair_wanted;
+bool g_board_wanted;                  // the other game has asked for this game's board
+bool g_waiting_for_board;             // and the other way round: nothing in the stream applies until it comes
+bool g_control_after_board;           // ... and that game has handed over already
 int g_repairs_in_a_row;
 
-void CompareTurnCheck(uint32_t tick)
+void CompareTurn(const TurnCheck& theirs)
 {
-    const TurnCheckEntry& ours = g_our_checks[tick % kTurnChecks];
-    const TurnCheckEntry& theirs = g_their_checks[tick % kTurnChecks];
-    if (ours.tick != tick || theirs.tick != tick)
-        return;
-    if (ours.hash == theirs.hash && ours.size == theirs.size) {
+    g_at_checkpoint = false;
+    if (g_waiting_for_board)
+        return;  // (its board is on the way)
+    proto::TurnReply reply = {theirs.tick, proto::kTurnSame};
+    if (g_tick == theirs.tick && memcmp(&g_our_check, &theirs, sizeof theirs) == 0) {
         ++g_turn_matches;
-        g_repair_wanted = false;
         g_repairs_in_a_row = 0;
-        return;
+    } else {
+        ++g_turn_mismatches;
+        Log("lockstep: BOARDS DIFFER at tick %u: ours %08X (%u bytes, tick %u, we are at %u), theirs %08X (%u bytes)",
+            theirs.tick, g_our_check.hash, g_our_check.size, g_our_check.tick, g_tick, theirs.hash, theirs.size);
+        if (g_repairs_in_a_row < kMaxRepairsInARow) {
+            g_waiting_for_board = true;
+            reply.answer = proto::kTurnSendBoard;
+        } else {
+            g_tick = theirs.tick;
+            g_desync_notice = true;
+            reply.answer = proto::kTurnGivenUp;
+        }
     }
-    ++g_turn_mismatches;
-    Log("lockstep: BOARDS DIFFER at tick %u: ours %08X (%u bytes), theirs %08X (%u bytes)", tick, ours.hash, ours.size,
-        theirs.hash, theirs.size);
-    if (g_repairs_in_a_row < kMaxRepairsInARow)
-        g_repair_wanted = true;
-    else
-        g_desync_notice = true;
+    net::Send(proto::kTurnReply, &reply, sizeof reply);
 }
 
-void AdoptBoard(void* board, void* copy, const std::string& modes, uint32_t seed)
+void OnTurnReply(const proto::TurnReply& r)
 {
-    g_repair_wanted = false;
+    if (r.tick == g_unanswered_tick)
+        g_unanswered = false;
+    if (r.answer == proto::kTurnSame) {
+        ++g_turn_matches;
+        g_repairs_in_a_row = 0;
+    } else if (r.answer == proto::kTurnSendBoard) {
+        ++g_turn_mismatches;
+        Log("lockstep: BOARDS DIFFER at tick %u: the other game asks for ours", r.tick);
+        g_board_wanted = true;
+    } else {
+        g_desync_notice = true;
+    }
+}
+
+void AdoptBoard(void* board, void* copy, const std::string& modes, uint32_t seed, uint32_t tick)
+{
+    g_board_wanted = g_waiting_for_board = g_at_checkpoint = g_unanswered = false;
+    g_allocators_apart = true;
     ++g_repairs_in_a_row;
+    g_tick = tick;
     g_mt.Seed(seed);
     g_crt_state = seed ^ 0x9E3779B9;
     g_crt_calls = 0;
@@ -1224,7 +1277,7 @@ void AdoptBoard(void* board, void* copy, const std::string& modes, uint32_t seed
     RestorePolled(nullptr, saved);
     g_desync_reported = false;
     g_mismatches = 0;
-    g_turn_check_state = -1;  // the next tick compares them again
+    g_turn_check_state = -1;  // the next tick checks them again
     Log("lockstep: tick %u, took one board (%u bytes, loaded %d, repair %d in a row)", g_tick,
         game::At<uint32_t>(copy, kWriterOffSize), loaded ? 1 : 0, g_repairs_in_a_row);
     chat::Note("The two games had drifted apart. Fixed!");
@@ -1238,6 +1291,7 @@ void SendBoard(void* board)
     h.arena_start = static_cast<uint32_t>(arena::BeginDuel(0));
     h.seed = g_level_seed * 2654435761u + g_tick;
     h.board_size = game::At<uint32_t>(copy, kWriterOffSize);
+    h.tick = g_tick;
     uint32_t total = static_cast<uint32_t>(sizeof h + h.board_size + modes.size());
     g_out.push_back(kItemBoard);
     Put(g_out, total);
@@ -1246,7 +1300,7 @@ void SendBoard(void* board)
     g_out.insert(g_out.end(), data, data + h.board_size);
     g_out.insert(g_out.end(), modes.begin(), modes.end());
     Flush();
-    AdoptBoard(board, copy, modes, h.seed);
+    AdoptBoard(board, copy, modes, h.seed, h.tick);
     FreeCopy(copy);
 }
 
@@ -1261,16 +1315,26 @@ void ReceiveBoard(void* board, const uint8_t* item, uint32_t total)
     using WriteFn = void(__thiscall*)(void*, const void*, size_t);
     reinterpret_cast<WriteFn>((*reinterpret_cast<void***>(copy))[kWriterSlotWrite])(copy, bytes, h.board_size);
     std::string modes(reinterpret_cast<const char*>(bytes + h.board_size), total - sizeof h - h.board_size);
-    AdoptBoard(board, copy, modes, h.seed);
+    AdoptBoard(board, copy, modes, h.seed, h.tick);
     FreeCopy(copy);
+    if (g_control_after_board) {
+        g_control_after_board = false;
+        TakeControl();
+    }
+}
+
+bool BoardCanGo(void* board)  // not with a ball in play on the game that sends it
+{
+    int state = LogicState(board);
+    return state == kStateAiming || state == kStateTurnPassing || state == kStateOver;
 }
 
 void TurnCheckpoint(void* board)
 {
     int state = LogicState(board);
-    bool turn_began = state == kStateAiming && g_turn_check_state != kStateAiming;
+    bool reached = state != g_turn_check_state && (state == kStateAiming || state == kStateTurnPassing);
     g_turn_check_state = state;
-    if (!turn_began)
+    if (!reached)
         return;
     void* display = game::At<void*>(board, kBoardOffPowerDisplay);
     int flash = display ? game::At<int>(display, kDisplayOffFlash) : 0;
@@ -1297,10 +1361,15 @@ void TurnCheckpoint(void* board)
     }
     FreeCopy(copy);
     Log("lockstep: turn check at tick %u: %u bytes, %08X", g_tick, size, h);
-    g_our_checks[g_tick % kTurnChecks] = {g_tick, h, size};
-    proto::TurnCheck c = {g_tick, h, size};
-    net::Send(proto::kTurnCheck, &c, sizeof c);
-    CompareTurnCheck(g_tick);
+    g_our_check = {g_tick, h, size};
+    if (!g_local_control) {
+        g_at_checkpoint = true;  // (the stream has its check right after this tick, unless the boards have parted)
+        return;
+    }
+    g_out.push_back(kItemTurn);
+    Put(g_out, g_our_check);
+    g_unanswered = true;
+    g_unanswered_tick = g_tick;
 }
 
 // A difference in here alone needn't be one the players can see (the allocator's counters are in it), so it goes in
@@ -1323,8 +1392,13 @@ void CheckHash(uint32_t tick, uint32_t theirs)
 
 void LocalTick(void* board)
 {
-    if (g_repair_wanted && LogicState(board) == kStateAiming)
+    if (g_board_wanted && BoardCanGo(board))
         SendBoard(board);
+    // The turn doesn't pass until the other game has answered: its board, if it wants this one, has to go before the
+    // results can come up. An answer comes well before this unless that game has fallen far behind.
+    if (g_unanswered && LogicState(board) == kStateTurnPassing &&
+        game::At<int>(LogicMgr(board), kLogicOffStateSteps) >= kTurnPassingWaitSteps)
+        return;
     EmitPolled(board);
     g_out.push_back(kItemTick);
     Put(g_out, g_tick);
@@ -1347,11 +1421,15 @@ uint32_t g_board_updates;
 
 void RemoteTicks(void* board)
 {
+    if (g_board_wanted && BoardCanGo(board))  // (handed over already, and the other game waits for this)
+        SendBoard(board);
     int budget = g_in_ticks > 30 ? 6 : g_in_ticks > 3 ? 2 : 1;
-    g_follow_stop = g_local_control ? "in control" : g_tick >= g_hold_at ? "held" : "caught up";
+    g_follow_stop = g_local_control ? "in control" : g_tick >= g_hold_at ? "held"
+                  : g_waiting_for_board ? "waiting for a board" : g_at_checkpoint ? "waiting at a check" : "caught up";
     while (!g_local_control && g_in_pos < g_in.size() && g_tick < g_hold_at) {
         const uint8_t* p = g_in.data() + g_in_pos;
         size_t left = g_in.size() - g_in_pos;
+        bool skip = g_at_checkpoint || g_waiting_for_board;  // this board isn't where the stream is
         switch (p[0]) {
         case kItemPolled:
             if (left < 1 + sizeof(Polled)) {
@@ -1371,6 +1449,8 @@ void RemoteTicks(void* board)
             memcpy(&b, p + 7, 4);
             memcpy(&c, p + 11, 4);
             g_in_pos += 15;
+            if (skip)
+                break;
             NoteEvent(target, slot, a, b, false);
             SavedLocal saved;
             OverridePolled(board, g_remote, saved);
@@ -1387,12 +1467,17 @@ void RemoteTicks(void* board)
             break;
         }
         case kItemTick: {
-            if (left < 5 || budget == 0) {
+            if (left < 5 || (budget == 0 && !skip)) {
                 g_follow_stop = budget == 0 ? "budget" : "partial tick";
                 return;
             }
             uint32_t tick;
             memcpy(&tick, p + 1, 4);
+            if (skip) {
+                g_in_pos += 5;
+                --g_in_ticks;
+                break;
+            }
             if (tick != g_tick)
                 Log("lockstep: stream tick %u but we are at %u", tick, g_tick);
             g_in_pos += 5;
@@ -1434,8 +1519,32 @@ void RemoteTicks(void* board)
             memcpy(&tick, p + 1, 4);
             memcpy(&hash, p + 5, 4);
             g_in_pos += 9;
-            if (tick == g_tick)
+            if (tick == g_tick && !skip)
                 CheckHash(tick, hash);
+            break;
+        }
+        case kItemTurn: {
+            if (left < 1 + sizeof(TurnCheck))
+                return;
+            TurnCheck theirs;
+            memcpy(&theirs, p + 1, sizeof theirs);
+            g_in_pos += 1 + sizeof theirs;
+            CompareTurn(theirs);
+            break;
+        }
+        case kItemControl: {
+            if (left < 5)
+                return;
+            uint32_t tick;
+            memcpy(&tick, p + 1, 4);
+            g_in_pos += 5;
+            if (g_waiting_for_board) {
+                g_control_after_board = true;
+                break;
+            }
+            g_at_checkpoint = false;
+            g_tick = tick;
+            TakeControl();
             break;
         }
         default:
@@ -1477,6 +1586,8 @@ int CountTicks(const uint8_t* p, size_t n)
         case kItemTick: i += 5; ++ticks; break;
         case kItemPlayNow: i += 4; break;
         case kItemCheck: i += 9; break;
+        case kItemTurn: i += 1 + sizeof(TurnCheck); break;
+        case kItemControl: i += 5; break;
         case kItemBoard: {
             if (i + 5 > n)
                 return ticks;
@@ -1690,10 +1801,10 @@ void Begin(void* board, bool is_host, const char* host_name, const char* client_
     g_mismatches = 0;
     g_turn_check_state = -1;
     g_turn_mismatches = g_turn_matches = 0;
-    g_repair_wanted = false;
+    g_board_wanted = g_waiting_for_board = g_control_after_board = g_at_checkpoint = g_unanswered = false;
+    g_allocators_apart = false;
     g_repairs_in_a_row = 0;
-    memset(g_our_checks, 0xFF, sizeof g_our_checks);
-    memset(g_their_checks, 0xFF, sizeof g_their_checks);
+    memset(&g_our_check, 0xFF, sizeof g_our_check);
     g_pointer_in_sync = 0;
     g_host_name = host_name;
     g_client_name = client_name;
@@ -1834,12 +1945,11 @@ bool HandleMessage(const net::Message& m)
         g_in_ticks += CountTicks(m.data.data(), m.data.size());
         return true;
     }
-    if (m.type == proto::kTurnCheck) {
-        proto::TurnCheck c;
-        if (m.data.size() >= sizeof c) {
-            memcpy(&c, m.data.data(), sizeof c);
-            g_their_checks[c.tick % kTurnChecks] = {c.tick, c.hash, c.size};
-            CompareTurnCheck(c.tick);
+    if (m.type == proto::kTurnReply) {
+        proto::TurnReply r;
+        if (g_active && m.data.size() >= sizeof r) {
+            memcpy(&r, m.data.data(), sizeof r);
+            OnTurnReply(r);
         }
         return true;
     }

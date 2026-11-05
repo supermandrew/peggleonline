@@ -2,9 +2,10 @@
 // Deterministic lockstep of the duel board. Both games run the full simulation. Whoever is in control
 // (the host while masters are chosen, then the player whose turn it is) runs the board freely and streams
 // every input event and tick; the other game replays the stream tick for tick. All randomness inside the
-// simulation comes from a private generator seeded identically on both sides. As each turn begins both games compare
-// a fingerprint of the whole board; if they differ, the one about to shoot sends its board and both load it, so
-// nothing that goes wrong lasts longer than a shot.
+// simulation comes from a private generator seeded identically on both sides. The game in control says when control
+// passes, in the stream, and the other game goes by that whatever its own board says. As a shot ends and as a turn
+// begins it says what its whole board came to; if the other game's differs, it sends its board and both load it, so
+// the shot as its player saw it stands.
 #include <cstdint>
 #include <string>
 
