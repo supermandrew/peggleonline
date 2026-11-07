@@ -9,7 +9,7 @@ ways to play:
   Time!.
 - **Sabotage Mode**: one blue peg is red, and whoever hits it sabotages the other player's next turn with Mirage!,
   Silhouette!, Blind Shot! or Lights Out!.
-- **Instant Replay** keeps the effects in Chaos and Red Peg duels. Online, its button becomes SAVE, which saves the
+- **Instant Replay** keeps the effects in Chaos and Sabotage duels. Online, its button becomes SAVE, which saves the
   last shot as a replay.
 - **Controller Support**: menus and the actual game are now playable with an Xbox, PS4 or PS5 controller, with
   remapping and vibration, and one controller per player in a local duel.
