@@ -170,6 +170,10 @@ constexpr uintptr_t kMakeBrickImage = 0x494A00;  // stdcall(brick, cell): makes 
 constexpr uintptr_t kDrawBrickCell = 0x497650;   // EAX cell, stdcall(brick, g): a brick drawn in a cell's picture
 constexpr uintptr_t kDrawImageF = 0x51BE40;      // EAX g, stdcall(image, float x, float y, const Rect* src)
 constexpr uintptr_t kDrawImage = 0x51B8A0;       // the same at ints, and scaled by the Graphics' scale
+// EAX g, EDX image, ECX const Rect* src (null: all of it), stdcall(float x, float y, float about_x, float about_y,
+// double radians): about_x, about_y from x, y.
+constexpr uintptr_t kDrawImageRotated = 0x51C020;
+constexpr int kAppSlotGetImage = 67;             // thiscall(const std::string& path, bool commit): a new picture
 // MemoryImage: 0x6C bytes, constructor ECX this; virtual Create(w, h), GetBits() (ARGB), BitsChanged().
 constexpr uintptr_t kMemoryImageCtor = 0x525250;
 constexpr int kMemoryImageSize = 0x6C;
@@ -509,7 +513,7 @@ void* g_board;                   // the board they're on
 bool On(Effect e) { return (g_active >> e & 1) != 0; }
 uint32_t Ticks(Effect e) { return g_ticks[e]; }
 
-// Red Peg Mode's red peg, on the duel's board (chaos.cpp decides when there is one).
+// Sabotage Mode's red peg, on the duel's board (chaos.cpp decides when there is one).
 void* g_red;
 int g_red_index = -1;      // in the level's order (the same on both computers)
 uint32_t g_red_clock;      // board ticks since it was chosen
@@ -2163,11 +2167,13 @@ int Pulse(int period, uint32_t ticks)  // 0..255..0 with the board's ticks
     return t < 256 ? t : 511 - t;
 }
 
-// ---- Pictures recolored: Silhouette's gray pegs, the red peg ----
+// ---- Pictures recolored: Silhouette's gray pegs, the red peg, the portals ----
 // Copies of the game's own pictures, made while drawing (outside the simulation) and swapped in while a peg
 // draws. Gray ones are made from the blue pictures, so that every gray peg looks the same whatever its color; red
 // ones from the purple pictures turned crimson (the colorblind pictures mark purple with a cross: from their blue).
-enum Tint { kTintGray, kTintRed };
+enum Tint { kTintGray, kTintRed, kTintPortal };  // (kTintPortal + n: the color of pair n of portals)
+
+const ui::Color kPairColors[3] = {{50, 200, 255, 255}, {255, 80, 220, 255}, {140, 255, 70, 255}};
 
 // The cell (type - 1, + 4 lit) a tinted cell is made from.
 int SourceCell(int tint, bool lit, bool colorblind)
@@ -2191,6 +2197,13 @@ int Clamp255(int v) { return v < 0 ? 0 : v > 255 ? 255 : v; }
 uint32_t TintPixel(uint32_t argb, int tint)
 {
     int r = argb >> 16 & 0xFF, gr = argb >> 8 & 0xFF, b = argb & 0xFF;
+    if (tint >= kTintPortal) {  // the hue turned to the pair's, its saturation and brightness kept
+        const ui::Color& c = kPairColors[tint - kTintPortal];
+        int hi = std::max({r, gr, b}), lo = std::min({r, gr, b});
+        int top = std::max({c.r, c.g, c.b}), low = std::min({c.r, c.g, c.b});
+        auto turned = [&](int v) { return lo + (hi - lo) * (v - low) / (top - low); };
+        return (argb & 0xFF000000) | turned(c.r) << 16 | turned(c.g) << 8 | turned(c.b);
+    }
     int nr, ng, nb;
     if (tint == kTintGray) {  // stone gray, a little cool
         int l = (r * 2 + gr * 3 + b * 5) / 10 * 5 / 4 + 10;
@@ -2571,39 +2584,60 @@ void Ring(void* g, float cx, float cy, float r0, float r1, const ui::Color& c)
     }
 }
 
-const ui::Color kPairColors[3] = {{50, 200, 255, 255}, {255, 80, 220, 255}, {140, 255, 70, 255}};
-
-ui::Color Alpha(ui::Color c, int a)
+GAME_CALL void DrawImageRotated(void* g, void* image, float centre_x, float centre_y, float angle)
 {
-    c.a = a;
-    return c;
+    float about_x = Width(image) / 2.0f, about_y = Height(image) / 2.0f;
+    float x0 = centre_x - about_x, y0 = centre_y - about_y;
+    double radians = angle;
+    __asm {
+        sub esp, 8
+        fld radians
+        fstp qword ptr [esp]
+        push about_y
+        push about_x
+        push y0
+        push x0
+        mov eax, g
+        mov edx, image
+        xor ecx, ecx
+        mov esi, kDrawImageRotated
+        call esi
+    }
 }
 
-void DrawPortal(void* g, float cx, float cy, const ui::Color& c, float spin)
+GAME_CALL void* LoadGameImage(const char* path)
 {
-    SetDrawMode(g, 1);
-    Disc(g, cx, cy, kPortalR + 9, Alpha(c, 45));
-    Disc(g, cx, cy, kPortalR + 4, Alpha(c, 60));
-    SetDrawMode(g, 0);
-    Disc(g, cx, cy, kPortalR, {12, 4, 30, 235});
-    SetDrawMode(g, 1);
-    for (int arm = 0; arm < 3; ++arm) {  // a swirl
-        for (int s = 0; s < 7; ++s) {
-            float t0 = s / 7.0f, t1 = (s + 1) / 7.0f;
-            float a0 = spin + arm * kTwoPi / 3 + t0 * 2.4f, a1 = spin + arm * kTwoPi / 3 + t1 * 2.4f;
-            float r0 = 2 + t0 * (kPortalR - 3), r1 = 2 + t1 * (kPortalR - 3), w = 1.5f + t0 * 1.5f;
-            Point q[4] = {
-                {static_cast<int>(cx + r0 * cosf(a0)), static_cast<int>(cy + r0 * sinf(a0))},
-                {static_cast<int>(cx + (r0 + w) * cosf(a0 + 0.35f)), static_cast<int>(cy + (r0 + w) * sinf(a0 + 0.35f))},
-                {static_cast<int>(cx + (r1 + w) * cosf(a1 + 0.35f)), static_cast<int>(cy + (r1 + w) * sinf(a1 + 0.35f))},
-                {static_cast<int>(cx + r1 * cosf(a1)), static_cast<int>(cy + r1 * sinf(a1))},
-            };
-            ui::SetColor(g, Alpha(c, 70 + s * 20));
-            PolyFill(g, q, 4);
-        }
+    game::GameString name(path);
+    void* app = game::App();
+    return VCall<void*(__thiscall*)(void*, const game::GameString&, bool)>(app, kAppSlotGetImage)(app, name, true);
+}
+
+// The portals are the game's own, from the levels that have them: Tula's dark hole, and Renfield's ring and swirl
+// turned to the pair's color. The two ends of a pair turn opposite ways: in one, out the other.
+void* g_portal_hole;
+void* g_portal_ring;
+void* g_portal_swirl;
+bool g_portal_art_tried;
+
+void DrawPortal(void* g, float cx, float cy, int pair, float spin)
+{
+    if (!g_portal_art_tried) {  // (once, and while drawing: outside the simulation)
+        g_portal_art_tried = true;
+        g_portal_hole = LoadGameImage("images/levels/darkswirl2");
+        g_portal_ring = LoadGameImage("images/levels/greenring");
+        g_portal_swirl = LoadGameImage("images/levels/twirl");
     }
+    void* ring = Tinted(g_portal_ring, kTintPortal + pair);
+    void* swirl = Tinted(g_portal_swirl, kTintPortal + pair);
+    if (!g_portal_hole || !ring || !swirl) {
+        Disc(g, cx, cy, kPortalR, kPairColors[pair]);  // (a portal must show whatever becomes of the pictures)
+        return;
+    }
+    DrawImageRotated(g, g_portal_hole, cx, cy, spin);
+    SetDrawMode(g, 1);
+    DrawImageRotated(g, ring, cx, cy, -spin / 2);
+    DrawImageRotated(g, swirl, cx, cy, spin);
     SetDrawMode(g, 0);
-    Ring(g, cx, cy, kPortalR - 2, kPortalR + 1, Alpha(c, 230));
 }
 
 // ---- Lights Out: darkness but for two sweeping spotlights ----
@@ -2960,7 +2994,7 @@ void __cdecl DrawUnder(void* board, void* g)  // after the pegs, under the balls
     if (On(kWormholes) || On(kPortalStorm)) {
         float spin = Ticks(On(kWormholes) ? kWormholes : kPortalStorm) * 0.06f;
         for (int i = 0; i < g_portal_count; ++i)
-            DrawPortal(g, g_portals[i].x, g_portals[i].y, kPairColors[i / 2], i & 1 ? -spin : spin);
+            DrawPortal(g, g_portals[i].x, g_portals[i].y, i / 2, i & 1 ? -spin : spin);
     }
     if (On(kDoubleBucket))
         DrawTwinBucket(board, g);
@@ -3718,7 +3752,7 @@ std::string EffectDebug()
              g_spooky_at[0] + 75, g_spooky_at[1] + 40, g_spooky_at[2], g_spooky_at[3], g_spooky_was, g_spooky_left,
              g_active);
     std::string out = buf;
-    // Red Peg Mode: the red peg (where, its type, lit, brick, moving, how many times drawn red, "Sabotage!" shown),
+    // Sabotage Mode: the red peg (where, its type, lit, brick, moving, how many times drawn red, "Sabotage!" shown),
     // Mirage's fakes (how many in gone pegs' places and bricks, and the easiest still there to shoot through: the
     // highest still round one), the guide stopped at a fake, Silhouette's gray drawings, pictures recolored.
     std::string fakes, brick_at = "-1,-1";

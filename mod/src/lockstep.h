@@ -22,7 +22,6 @@ void SeedAndRunSynced(uint32_t seed, uint16_t fpu_control, uint32_t clock, void 
 void Begin(void* board, bool is_host, const char* host_name, const char* client_name);
 void End();
 bool Active();
-bool TakeDesyncNotice();  // true once after the two games are found to differ
 uint32_t CurrentTick();
 std::string DebugState();  // testing
 void HoldAt(uint32_t tick);  // testing: pause the simulation at `tick` (0xFFFFFFFF: run)

@@ -1,5 +1,5 @@
 #pragma once
-// The effects of Chaos Mode and Red Peg Mode (chaos_effects.cpp), driven by chaos.cpp. A round's effect and a red
+// The effects of Chaos Mode and Sabotage Mode (chaos_effects.cpp), driven by chaos.cpp. A round's effect and a red
 // peg's can be in play together. Begin and End run inside the board's ticks (the shared simulation online), and
 // what the effects do as the game runs happens in each physics step. What the effects draw only reads that state,
 // and moves with the steps too, so two online games show the same picture at the same tick.
@@ -30,7 +30,7 @@ void DebugSpooky();  // testing: the next shot is a Spooky Ball that comes back 
 // or off now, as when a turn begins.
 bool DebugPower(void* board, int power, int turns, int player = -1);
 
-// Red Peg Mode: the red peg (a blue peg drawn red, never made purple or shuffled), chosen inside the ticks.
+// Sabotage Mode: the red peg (a blue peg drawn red, never made purple or shuffled), chosen inside the ticks.
 void* ChooseRedPeg(void* board);  // a random unhit blue peg (round or a brick, still or moving), now the red one
 void ForgetRedPeg(void* keep_board);  // unless it's on that board
 bool RedPegHit();                       // the red peg is lit (or gone)

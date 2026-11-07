@@ -1,6 +1,6 @@
 # Peggle Nights online duel mod
 
-Adds Online Play to Duel mode, Chaos Mode and Red Peg Mode for duels, play with a controller (menus and the whole
+Adds Online Play to Duel mode, Chaos Mode and Sabotage Mode for duels, play with a controller (menus and the whole
 game), and a borderless full screen.
 Built as a replacement `bass.dll`
 that forwards every BASS export to the original (`bass_orig.dll`) and hooks the game in memory. How the game works is
@@ -16,7 +16,7 @@ documented in [../re/NOTES.md](../re/NOTES.md).
 | `src/packs.cpp` | Level packs between the players: which pack holds a level, sending one on its own thread, receiving into a temporary file, checking it before the game can see it |
 | `src/arena.cpp` | Deterministic allocator for the simulation (address-ordered sets must iterate identically) |
 | `src/chat.cpp` | The CHAT button, its phrase list and the box that shows what was said |
-| `src/chaos.cpp` | Chaos Mode and Red Peg Mode: their boxes on the Two Player Selection, the rounds, the red peg's hit and whose turn gets its effect, which effect comes next, the announcements |
+| `src/chaos.cpp` | Chaos Mode and Sabotage Mode: their boxes on the Two Player Selection, the rounds, the red peg's hit and whose turn gets its effect, which effect comes next, the announcements |
 | `src/chaos_effects.cpp` | The effects (Chaos Mode's 16, the red peg's Mirage and Silhouette) and the red peg: hooks into the game's pegs, balls, physics, bucket, cannon and drawing, recolored copies of the peg pictures, Mirage's blackout, the effects' state of a shot for its replay |
 | `src/replays.cpp` | Instant Replay with the modes: the effects' state of each recorded shot, put in place while its replay plays; saved replay files carrying it; online, SAVE in Instant Replay's place |
 | `src/pad.cpp` | The controllers (XInput, and `padhid` while XInput has none), together or one at a time, whether they or the mouse are in use, vibration from the game's sounds |
@@ -81,10 +81,10 @@ python mod\tools\duo.py chaosfull  :: start, then chaos (chaosonlinefull: start,
 python mod\tools\duo.py chaosreplay :: Instant Replay of a shot under each Chaos Mode effect (after start; or some: 2 13)
 python mod\tools\duo.py chaoszen   :: just the rounds and a Zen Ball's shot counting as one (after start)
 python mod	ools\duo.py chaospowers :: just masters' powers at the bucket with its effects (after start)
-python mod\tools\duo.py redpeg     :: Red Peg Mode in a local duel on A: the box, each red peg effect, with Chaos Mode,
+python mod\tools\duo.py redpeg     :: Sabotage Mode in a local duel on A: the box, each red peg effect, with Chaos Mode,
                                    :: bricks and moving pegs (Eiffel Power), a brick turning round a flower (The Guardians)
 python mod\tools\duo.py redturning :: just the turning red brick, drawn red in every frame (after start)
-python mod\tools\duo.py redpegonline :: A hosts, B joins: an online Red Peg Mode duel (after start)
+python mod\tools\duo.py redpegonline :: A hosts, B joins: an online Sabotage Mode duel (after start)
 python mod\tools\duo.py redpegfull :: start, then redpeg (redpegonlinefull: start, then redpegonline)
 python mod\tools\duo.py finish     :: close both copies, debug mode off
 ```
@@ -127,7 +127,7 @@ it plays, the balls where the shot's were after every step (the pipe's `replay` 
 after each physics step of the shot and of its replay), and the effect back on afterwards. `replay button` says where
 Instant Replay is; Done is the replay panel's bottom button.
 
-`redpeg` ticks and unticks the RED PEG MODE box (above CHAOS MODE; netplay.ini remembers it) and checks that the duel
+`redpeg` ticks and unticks the SABOTAGE MODE box (above CHAOS MODE; netplay.ini remembers it) and checks that the duel
 has one red peg, a blue peg underneath, drawn red. It moves the red peg onto a brick, a moving peg and a still round
 one (`chaos redat <x> <y> brick|moving|round`; those the level has) and checks each is drawn red. It hits the red peg
 for real ("Sabotage!" shown once: `chaos fx` counts them), so the other player's next turn gets Mirage: the board black

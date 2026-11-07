@@ -9,7 +9,6 @@
 
 #include "arena.h"
 #include "chaos.h"
-#include "chat.h"
 #include "debug.h"
 #include "dialogs.h"
 #include "game.h"
@@ -46,6 +45,7 @@ constexpr int kWriterSlotWrite = 1;         // thiscall(const void*, size)
 constexpr int kBoardOffPowerDisplay = 0x704;  // the master's display: its flash as a power's count changes runs on
 constexpr int kDisplayOffFlash = 0x30;        // each computer's own drawing, so it's no part of the comparison
 constexpr int kWriterOffData = 0x08, kWriterOffSize = 0x0C;
+constexpr uintptr_t kObjectNumber = 0x6CBDD0;  // every PhysObj made takes the next number; each level starts it at 0
 constexpr int kAppOffDialogCount = 0x32C;   // how many dialogs are open (the size of the app's std::map of them)
 constexpr int kDialogLeaveGame = 4, kDialogGameMenu = 19;
 constexpr int kLogicOffAim = 0xEC;                 // float: angle the cannon turns towards
@@ -527,7 +527,7 @@ enum ItemKind : uint8_t {
     kItemPolled = 1,   // Polled: input state for the following events and ticks
     kItemEvent = 2,    // u8 target, u8 slot, i32 a, i32 b, i32 c: an input call on a synchronized widget
     kItemTick = 3,     // u32 tick: run one Board::Update
-    kItemPlayNow = 4,  // u8 master1, u8 master2, u8 options (1: Chaos Mode, 2: Red Peg Mode): Play Now pressed in
+    kItemPlayNow = 4,  // u8 master1, u8 master2, u8 options (1: Chaos Mode, 2: Sabotage Mode): Play Now pressed in
                        // the selection dialog
     kItemCheck = 5,    // u32 tick, u32 hash: state fingerprint after that tick
     kItemBoard = 6,    // u32 size, BoardHeader, the board, the modes' state: both games take this board, right here
@@ -568,7 +568,6 @@ constexpr uint32_t kRecordTicks = 1000;  // debug mode: how long allocations and
 
 void RecordTrace();
 void DumpTrace(const char* why);
-bool g_desync_notice;  // shown to the player once per duel
 DWORD g_stat_time;
 int g_stat_ticks;
 uint32_t g_hold_at = 0xFFFFFFFF;  // testing: stop the simulation at this tick on both computers
@@ -1231,7 +1230,6 @@ void CompareTurn(const TurnCheck& theirs)
             reply.answer = proto::kTurnSendBoard;
         } else {
             g_tick = theirs.tick;
-            g_desync_notice = true;
             reply.answer = proto::kTurnGivenUp;
         }
     }
@@ -1249,8 +1247,6 @@ void OnTurnReply(const proto::TurnReply& r)
         ++g_turn_mismatches;
         Log("lockstep: BOARDS DIFFER at tick %u: the other game asks for ours", r.tick);
         g_board_wanted = true;
-    } else {
-        g_desync_notice = true;
     }
 }
 
@@ -1263,6 +1259,10 @@ void AdoptBoard(void* board, void* copy, const std::string& modes, uint32_t seed
     g_mt.Seed(seed);
     g_crt_state = seed ^ 0x9E3779B9;
     g_crt_calls = 0;
+    // A load leaves this alone, and a game that waited for the board made fewer objects meanwhile: each new ball, whose
+    // number is in the board, would differ from then on and ask for a repair every turn. Any number will do as long
+    // as both have it: only the computer opponent's look-ahead compares them.
+    *reinterpret_cast<uint32_t*>(kObjectNumber) = tick;
     Polled neutral = {};  // (as when a board is built)
     neutral.x = 400;
     neutral.y = 300;
@@ -1280,7 +1280,6 @@ void AdoptBoard(void* board, void* copy, const std::string& modes, uint32_t seed
     g_turn_check_state = -1;  // the next tick checks them again
     Log("lockstep: tick %u, took one board (%u bytes, loaded %d, repair %d in a row)", g_tick,
         game::At<uint32_t>(copy, kWriterOffSize), loaded ? 1 : 0, g_repairs_in_a_row);
-    chat::Note("The two games had drifted apart. Fixed!");
 }
 
 void SendBoard(void* board)
@@ -1304,17 +1303,96 @@ void SendBoard(void* board)
     FreeCopy(copy);
 }
 
+// What a hash can't say: where this game's board differs from the one that came, for the log. (Only the game taking a
+// board ever holds both.) The two are walked together, and at a difference it looks for where they line up again, so
+// that a few bytes more on one side don't make all that follows look different.
+constexpr uint32_t kDiffSearch = 96, kDiffLineUp = 12, kDiffBytesShown = 32, kDiffContext = 16;
+constexpr int kDiffPlacesShown = 16;
+
+std::string HexBytes(const uint8_t* p, uint32_t n)
+{
+    static const char kDigits[] = "0123456789ABCDEF";
+    std::string s;
+    for (uint32_t i = 0; i < n; ++i) {
+        if (i)
+            s += ' ';
+        s += kDigits[p[i] >> 4];
+        s += kDigits[p[i] & 15];
+    }
+    return s;
+}
+
+bool LinesUp(const uint8_t* ours, uint32_t our_left, const uint8_t* theirs, uint32_t their_left, uint32_t a, uint32_t b)
+{
+    return a + kDiffLineUp <= our_left && b + kDiffLineUp <= their_left &&
+           memcmp(ours + a, theirs + b, kDiffLineUp) == 0;
+}
+
+// How far on in each they line up again: the same distance in both first (a value changed where it is).
+bool FindLineUp(const uint8_t* ours, uint32_t our_left, const uint8_t* theirs, uint32_t their_left, uint32_t& a,
+                uint32_t& b)
+{
+    for (a = 1; a <= kDiffSearch; ++a) {
+        b = a;
+        if (LinesUp(ours, our_left, theirs, their_left, a, b))
+            return true;
+    }
+    for (uint32_t sum = 1; sum <= 2 * kDiffSearch; ++sum) {
+        for (a = sum > kDiffSearch ? sum - kDiffSearch : 0; a <= sum && a <= kDiffSearch; ++a) {
+            b = sum - a;
+            if (LinesUp(ours, our_left, theirs, their_left, a, b))
+                return true;
+        }
+    }
+    return false;
+}
+
+void LogDifferences(const char* what, const uint8_t* ours, uint32_t our_size, const uint8_t* theirs,
+                    uint32_t their_size)
+{
+    uint32_t i = 0, j = 0;
+    int places = 0;
+    while (i < our_size || j < their_size) {
+        if (i < our_size && j < their_size && ours[i] == theirs[j]) {
+            ++i;
+            ++j;
+            continue;
+        }
+        uint32_t a, b;
+        if (!FindLineUp(ours + i, our_size - i, theirs + j, their_size - j, a, b)) {
+            a = our_size - i;  // (all that's left)
+            b = their_size - j;
+        }
+        if (++places <= kDiffPlacesShown) {
+            uint32_t context = i < kDiffContext ? i : kDiffContext;
+            Log("lockstep:   %s at %u: ours %u bytes [%s], theirs %u bytes [%s], after [%s]", what, i, a,
+                HexBytes(ours + i, a < kDiffBytesShown ? a : kDiffBytesShown).c_str(), b,
+                HexBytes(theirs + j, b < kDiffBytesShown ? b : kDiffBytesShown).c_str(),
+                HexBytes(ours + i - context, context).c_str());
+        }
+        i += a;
+        j += b;
+    }
+    Log("lockstep: %s: %u bytes here, %u came, places that differ: %d", what, our_size, their_size, places);
+}
+
 void ReceiveBoard(void* board, const uint8_t* item, uint32_t total)
 {
     BoardHeader h;
     memcpy(&h, item, sizeof h);
     const uint8_t* bytes = item + sizeof h;
     arena::BeginDuel(h.arena_start);
-    void* copy = CopyBoard(board);  // (a writer to hold the board that came)
+    void* copy = CopyBoard(board);  // (a writer to hold the board that came; until then it holds this game's)
+    Log("lockstep: a board came from tick %u, we are at %u, state %d", h.tick, g_tick, LogicState(board));
+    LogDifferences("board", game::At<const uint8_t*>(copy, kWriterOffData), game::At<uint32_t>(copy, kWriterOffSize),
+                   bytes, h.board_size);
     game::At<uint32_t>(copy, kWriterOffSize) = 0;
     using WriteFn = void(__thiscall*)(void*, const void*, size_t);
     reinterpret_cast<WriteFn>((*reinterpret_cast<void***>(copy))[kWriterSlotWrite])(copy, bytes, h.board_size);
     std::string modes(reinterpret_cast<const char*>(bytes + h.board_size), total - sizeof h - h.board_size);
+    std::string our_modes = chaos::SaveState(board);
+    LogDifferences("modes", reinterpret_cast<const uint8_t*>(our_modes.data()), static_cast<uint32_t>(our_modes.size()),
+                   reinterpret_cast<const uint8_t*>(modes.data()), static_cast<uint32_t>(modes.size()));
     AdoptBoard(board, copy, modes, h.seed, h.tick);
     FreeCopy(copy);
     if (g_control_after_board) {
@@ -1372,8 +1450,8 @@ void TurnCheckpoint(void* board)
     g_unanswered_tick = g_tick;
 }
 
-// A difference in here alone needn't be one the players can see (the allocator's counters are in it), so it goes in
-// the log; what they're told about is the boards, each turn.
+// A difference in here alone needn't be one the players can see (the allocator's counters are in it), so it only goes
+// in the log; the boards are what's compared and put right, each turn.
 void CheckHash(uint32_t tick, uint32_t theirs)
 {
     uint32_t ours = StateHash(g_board);
@@ -1861,12 +1939,6 @@ bool ControllerSkips(void* widget)
     return false;
 }
 
-bool TakeDesyncNotice()
-{
-    bool n = g_desync_notice;
-    g_desync_notice = false;
-    return n;
-}
 void SetNewLevelHandler(void (*fn)()) { g_on_new_level = fn; }
 
 std::string DebugState()

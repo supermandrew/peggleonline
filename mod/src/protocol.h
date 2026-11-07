@@ -77,7 +77,7 @@ struct Chat {
 
 struct DuelOptions {  // (what the duel gets is in the host's Play Now, in the stream)
     uint8_t chaos;     // Chaos Mode
-    uint8_t red;       // Red Peg Mode
+    uint8_t red;       // Sabotage Mode
 };
 #pragma pack(pop)
 

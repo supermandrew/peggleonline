@@ -21,7 +21,7 @@ windows have focus and wherever the real mouse is.
   python duo.py netend           a profile saved on one computer alone as a duel ends, the next level together
   python duo.py netlevels        a level the joiner doesn't have: refused with a message, Random stays within both
   python duo.py netrepair        one game pushed off: found at the next turn, both take one board, pictures identical
-  python duo.py netmodes         the same in the middle of Chaos Mode and Red Peg Mode, with their effects in place
+  python duo.py netmodes         the same in the middle of Chaos Mode and Sabotage Mode, with their effects in place
   python duo.py netshots [shooter|other]  a shot ending sooner on one game alone, each way round with each player
                                  shooting, a turn passing sooner on one, one game answering late, the same with the
                                  duel's last shot: both take the board of the player who shot, none of it stalls
@@ -67,7 +67,7 @@ windows have focus and wherever the real mouse is.
   python duo.py chaosonline      A hosts, B joins: the joiner's box shows the host's; online Chaos Mode duels (Replay
                                  Level) through all 16 effects, the same on both, pictures identical, the bomb set off
   python duo.py chaosfull | chaosonlinefull   start first
-  python duo.py redpeg           copy A: Red Peg Mode in a local duel: the RED PEG MODE box above CHAOS MODE (ticks,
+  python duo.py redpeg           copy A: Sabotage Mode in a local duel: the SABOTAGE MODE box above CHAOS MODE (ticks,
                                  remembered), one red peg (never made purple), drawn red as a brick, a moving peg and
                                  a round one; hitting it shows "Sabotage!" and gives the other player each of its
                                  effects for their next turn only (Mirage: the board black as the turn passes, fakes in
@@ -78,7 +78,7 @@ windows have focus and wherever the real mouse is.
                                  one; Mirage's fakes on Eiffel Power; a red brick turning round a flower (The
                                  Guardians) drawn red in every frame
   python duo.py redturning       just the turning red brick
-  python duo.py redpegonline     A hosts, B joins: the joiner's RED PEG MODE box shows the host's; an online duel with
+  python duo.py redpegonline     A hosts, B joins: the joiner's SABOTAGE MODE box shows the host's; an online duel with
                                  the red peg hit and Mirage then Silhouette, the same on both, pictures identical;
                                  SAVE in Instant Replay's place (B's shot saved, noted in B's chat only, one saved
                                  in flight after the shot), still in sync; the saved shot played from Replays
@@ -463,7 +463,7 @@ def start(own_folder=False):
     # stop at a hardware-acceleration question. Clear it, as a clean exit would have.
     subprocess.run(['reg', 'add', r'HKCU\Software\Steam\PeggleNights', '/v', 'InProgress', '/t', 'REG_DWORD',
                     '/d', '0', '/f'], capture_output=True)
-    # Every test starts without Chaos Mode or Red Peg Mode ticked (their tests tick them).
+    # Every test starts without Chaos Mode or Sabotage Mode ticked (their tests tick them).
     import ctypes
     for key in ('chaos', 'red'):
         ctypes.windll.kernel32.WritePrivateProfileStringW('duel', key, '0', os.path.join(GAME, 'mods', 'netplay.ini'))
@@ -915,7 +915,7 @@ def net_repair():
 
 
 def net_repair_modes():
-    """The same in the middle of Chaos Mode and Red Peg Mode, with an effect in place each time (a second bucket,
+    """The same in the middle of Chaos Mode and Sabotage Mode, with an effect in place each time (a second bucket,
     the board upside down, wormholes, portals): the effect comes through the repair, the same on both."""
     connect()
     time.sleep(2)
@@ -3110,14 +3110,14 @@ def replays_viewer(k, what, path, during=None):
     ok(f'{what}: the saved replay played from Replays with its effects, the balls where they went')
 
 
-# ---- Red Peg Mode ----
+# ---- Sabotage Mode ----
 
 RED_EFFECTS = {16: 'Mirage!', 17: 'Silhouette!', 7: 'Blind Shot!', 12: 'Lights Out!'}
 RED_BOX_AREA = (330, 360, 470, 450)  # the box's center: the selection's middle column, above CHAOS MODE
 
 
 def red_box(k):
-    """The RED PEG MODE box on the selection: (center x, center y, ticked), or None."""
+    """The SABOTAGE MODE box on the selection: (center x, center y, ticked), or None."""
     r = send(k, 'chaos redbox')
     if r == 'none':
         return None
@@ -3204,7 +3204,7 @@ def level_screen_home(k='A'):
 
 
 def red_local_start(k='A', chaos=False, check_box=True, level=(1, 140, 170)):
-    """Copy A: Duel > Local Play > a level (the first). RED PEG MODE sits above CHAOS MODE, ticks and unticks and
+    """Copy A: Duel > Local Play > a level (the first). SABOTAGE MODE sits above CHAOS MODE, ticks and unticks and
     netplay.ini remembers it; Play Now with it ticked (and CHAOS MODE as asked) starts a duel with one red peg: a blue
     peg, drawn red."""
     click(k, 680, 372)                                       # Duel
@@ -3223,15 +3223,15 @@ def red_local_start(k='A', chaos=False, check_box=True, level=(1, 140, 170)):
     time.sleep(1.5)                                          # slides in
     box, cbox = red_box(k), chaos_box(k)
     if not box or not cbox:
-        raise StepFailed(f'the selection should have both boxes: RED PEG MODE {box}, CHAOS MODE {cbox}')
+        raise StepFailed(f'the selection should have both boxes: SABOTAGE MODE {box}, CHAOS MODE {cbox}')
     x0, y0, x1, y1 = RED_BOX_AREA
     if not (x0 < box[0] < x1 and y0 < box[1] < y1 and box[1] < cbox[1] - 20):
-        raise StepFailed(f'the RED PEG MODE box is at {box[:2]}, not above CHAOS MODE ({cbox[:2]}) in the middle')
+        raise StepFailed(f'the SABOTAGE MODE box is at {box[:2]}, not above CHAOS MODE ({cbox[:2]}) in the middle')
     if check_box:
         frame(k, 'red_selection')
         for want in (not box[2], box[2]):                    # flip it, back
-            set_box(k, red_box, want, 'red', 'RED PEG MODE')
-    set_box(k, red_box, True, 'red', 'RED PEG MODE')
+            set_box(k, red_box, want, 'red', 'SABOTAGE MODE')
+    set_box(k, red_box, True, 'red', 'SABOTAGE MODE')
     set_box(k, chaos_box, chaos, 'chaos', 'CHAOS MODE')
     if check_box:
         frame(k, 'red_selection_ticked')
@@ -3240,7 +3240,7 @@ def red_local_start(k='A', chaos=False, check_box=True, level=(1, 140, 170)):
     wait(lambda: board(k)['state'] == '1', 30, 'the duel never got to the first shot')
     s = chaos_state(k)
     if s['red'] != '1' or s['on'] != ('1' if chaos else '0') or s['running'] != '1' or s['redhit'] != '0':
-        raise StepFailed(f'the duel should have Red Peg Mode{" and Chaos Mode" if chaos else ""}, running: {s}')
+        raise StepFailed(f'the duel should have Sabotage Mode{" and Chaos Mode" if chaos else ""}, running: {s}')
     f = chaos_fx(k)
     if int(f['redpeg']) < 0 or f['redtype'] != '1':
         raise StepFailed(f'the duel should have a red peg, a blue one underneath: {f}')
@@ -3248,7 +3248,7 @@ def red_local_start(k='A', chaos=False, check_box=True, level=(1, 140, 170)):
     rx, ry, n, _ = red_drawn(k, 'red_peg_chosen', 20)
     if n < (60 if f['redbrick'] == '0' else 30):
         raise StepFailed(f'the red peg ({red_kind(f)}) at ({rx},{ry}) is not drawn red ({n} red pixels)')
-    ok(f'local duel: the RED PEG MODE box (above CHAOS MODE, ticks, remembered); a red peg at ({rx},{ry}), '
+    ok(f'local duel: the SABOTAGE MODE box (above CHAOS MODE, ticks, remembered); a red peg at ({rx},{ry}), '
        f'{red_kind(chaos_fx(k))}')
 
 
@@ -3657,7 +3657,7 @@ def redpeg_local():
     chaos_leave(k)
     time.sleep(3)
     level_screen_home(k)                                     # (Eiffel Power is on Stage Six, The Guardians on 13)
-    ok('Red Peg Mode (local) passed')
+    ok('Sabotage Mode (local) passed')
 
 
 def online_save(saved):
@@ -3711,11 +3711,11 @@ def online_save(saved):
 
 
 def red_online():
-    """Both copies: the joiner's RED PEG MODE box shows the host's and takes no clicks; an online duel's red peg is the
+    """Both copies: the joiner's SABOTAGE MODE box shows the host's and takes no clicks; an online duel's red peg is the
     same on both, and so are its effects when it's hit (Mirage, then Silhouette): pictures identical."""
     for k in 'AB':
         if not red_box(k):
-            raise StepFailed(f'copy {k} has no RED PEG MODE box on the online selection')
+            raise StepFailed(f'copy {k} has no SABOTAGE MODE box on the online selection')
     if chaos_box('A')[2]:
         x, y, _ = chaos_box('A')
         click('A', x, y)
@@ -3724,20 +3724,20 @@ def red_online():
             x, y, _ = red_box('A')
             click('A', x, y)
         wait(lambda: red_box('A')[2] == want and red_box('B')[2] == want, 5,
-             f"the joiner's RED PEG MODE box did not follow the host's ({want})")
+             f"the joiner's SABOTAGE MODE box did not follow the host's ({want})")
     x, y, _ = red_box('B')
     click('B', x, y)
     time.sleep(0.8)
     if not red_box('B')[2]:
-        raise StepFailed("the joiner's RED PEG MODE box should stay as the host has it")
+        raise StepFailed("the joiner's SABOTAGE MODE box should stay as the host has it")
     frame('B', 'red_online_selection')
-    ok("online selection: the joiner's RED PEG MODE box shows the host's choice")
+    ok("online selection: the joiner's SABOTAGE MODE box shows the host's choice")
     duel()
     wait(lambda: all(chaos_state(c)['running'] == '1' for c in 'AB'), 30, 'the online duel never began')
     a, b = chaos_state('A'), chaos_state('B')
     fa, fb = chaos_fx('A'), chaos_fx('B')
     if a['red'] != '1' or b['red'] != '1' or a['on'] != '0' or fa['redpeg'] != fb['redpeg'] or fa['redpeg'] == '-1':
-        raise StepFailed(f'both should have Red Peg Mode (no Chaos Mode) and the same red peg: A {a} {fa}, B {b} {fb}')
+        raise StepFailed(f'both should have Sabotage Mode (no Chaos Mode) and the same red peg: A {a} {fa}, B {b} {fb}')
     synced('red_online_peg')
     glitches0 = {c: int(chaos_fx(c)['glitches']) for c in 'AB'}  # (counted since each copy started)
     for effect in (16, 17):
@@ -3812,7 +3812,7 @@ def red_online():
         for p in saved:
             if os.path.exists(p):
                 os.remove(p)
-    ok('Red Peg Mode (online) passed')
+    ok('Sabotage Mode (online) passed')
 
 
 def main(argv):

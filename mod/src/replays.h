@@ -1,5 +1,5 @@
 #pragma once
-// Instant Replays with Chaos Mode and Red Peg Mode (local duels): each shot the game records gets the effects'
+// Instant Replays with Chaos Mode and Sabotage Mode (local duels): each shot the game records gets the effects'
 // state too, which a replay puts in place while it plays; saved replay files carry it after the game's own data
 // (the game reads only what it wrote, so the files still open anywhere). Online, where a replay would change one
 // computer's game, the Instant Replay button is SAVE: the last shot goes to a replay file under an automatic name,

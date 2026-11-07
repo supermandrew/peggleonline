@@ -834,8 +834,6 @@ void Update()
         return;
     lockstep::Update();
     UpdatePackProgress();
-    if (lockstep::TakeDesyncNotice())  // (no dialog: it would be in the way of the next turn)
-        chat::Note("The two games no longer match. Pick a new level after this one.");
     if (g_phase == Phase::InGame && !lockstep::Active()) {
         Leave("", true);  // this player left the duel (Menu > Main Menu): let the opponent know
         return;

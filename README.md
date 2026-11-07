@@ -7,7 +7,7 @@ ways to play:
   step, so every shot plays out the same on both screens. A CHAT button sends set phrases to your opponent.
 - **Chaos Mode**: each round brings one of 16 random effects, such as Big Balls!, Wormholes!, Upside Down! and Bullet
   Time!.
-- **Red Peg Mode**: one blue peg is red, and whoever hits it sabotages the other player's next turn with Mirage!,
+- **Sabotage Mode**: one blue peg is red, and whoever hits it sabotages the other player's next turn with Mirage!,
   Silhouette!, Blind Shot! or Lights Out!.
 - **Instant Replay** keeps the effects in Chaos and Red Peg duels. Online, its button becomes SAVE, which saves the
   last shot as a replay.
@@ -15,7 +15,7 @@ ways to play:
   remapping and vibration, and one controller per player in a local duel.
 - **Borderless full screen**, and a sharper picture in a window on scaled displays.
 
-Chaos Mode, Red Peg Mode and controller support work in local duels too.
+Chaos Mode, Sabotage Mode and controller support work in local duels too.
 
 ## Requirements
 
@@ -31,7 +31,7 @@ Chaos Mode, Red Peg Mode and controller support work in local duels too.
 3. Start Peggle Nights from Steam as usual. Online play is under Duel > Online Play.
 
 `Uninstall.bat` removes the mod, and so does Steam's "Verify integrity of game files". The README.txt in the zip covers
-playing online, Chaos Mode, Red Peg Mode, the controller, and what to do if your opponent can't connect: the host's TCP
+playing online, Chaos Mode, Sabotage Mode, the controller, and what to do if your opponent can't connect: the host's TCP
 port 28008 has to be reachable, which the mod arranges with the router through UPnP, or you can forward the port
 yourself.
 

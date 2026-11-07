@@ -2,7 +2,7 @@ PEGGLE NIGHTS - ONLINE DUEL
 ===========================
 
 Adds online play to Duel mode, so two people on different computers can duel each other, adds Chaos
-Mode and Red Peg Mode to duels, lets you play the whole game with a controller, and adds a
+Mode and Sabotage Mode to duels, lets you play the whole game with a controller, and adds a
 borderless full screen.
 Both players need Peggle Nights on Steam and this same version of the mod.
 
@@ -83,9 +83,9 @@ do replays you save. With 3D acceleration off (Options), Upside Down's bucket st
 and Bullet Time doesn't zoom in.
 
 
-RED PEG MODE
-------------
-Tick RED PEG MODE (just above CHAOS MODE) before you press Play Now. One blue peg of the level is
+SABOTAGE MODE
+-------------
+Tick SABOTAGE MODE (just above CHAOS MODE) before you press Play Now. One blue peg of the level is
 red: any of them, round or a brick, still or moving. Whoever hits it ("Sabotage!") gives the other
 player an effect for their next turn only, named in the middle of the screen like a chaos effect.
 After that there is no red peg for the rest of the game.

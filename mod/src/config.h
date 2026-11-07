@@ -27,7 +27,7 @@ void SetPadPlayersSwapped(bool swapped);
 bool Borderless();
 void SetBorderless(bool on);
 
-// Duel: Chaos Mode and Red Peg Mode, the boxes on the Two Player Selection.
+// Duel: Chaos Mode and Sabotage Mode, the boxes on the Two Player Selection.
 bool ChaosMode();
 void SetChaosMode(bool on);
 bool RedPegMode();

@@ -51,10 +51,11 @@ constexpr uintptr_t kFontSmall = 0x6CA94C;  // FONT_OVERLOAD16OUTLINE
 constexpr uintptr_t kSoundGong = 0x6CA8E0;  // SOUND_GONG
 
 // The Two Player Selection (dialog 1). Its middle column is free under the computer's difficulty: the boxes go
-// there, lined up with Play a Friend (175, 110, 170 wide, relative to the dialog), RED PEG MODE above CHAOS MODE.
+// there, centered under Play a Friend (175, 110, 170 wide, relative to the dialog) and a little wider for SABOTAGE
+// MODE's sake, which goes above CHAOS MODE.
 constexpr int kSelectionId = 1;
 constexpr int kBoxId = 9103, kRedBoxId = 9104;
-constexpr int kBoxX = 175, kBoxY = 400, kRedBoxY = 362, kBoxW = 170;
+constexpr int kBoxX = 170, kBoxY = 400, kRedBoxY = 362, kBoxW = 180;
 
 struct EffectInfo {
     const char* name;
@@ -99,7 +100,7 @@ uint32_t NextRandom()
 struct Duel {
     void* board = nullptr;
     bool on = false;       // Chaos Mode in this duel (kept when the level is replayed: no selection then)
-    bool red_on = false;   // Red Peg Mode (likewise)
+    bool red_on = false;   // Sabotage Mode (likewise)
     bool running = false;  // from the first turn until the duel is over
     int last_state = -1;
     int round = 0;         // 0: both players' first shots, without an effect
@@ -109,7 +110,7 @@ struct Duel {
     uint32_t effect_ticks = 0;
     uint8_t bag[kChaosEffects] = {};  // the effects not dealt yet, in a shuffled order (dealt from the end)
     int bag_left = 0;
-    // Red Peg Mode
+    // Sabotage Mode
     bool red_hit = false;       // the red peg was hit: none for the rest of the duel
     int red_victim = -1;        // the player whose next turn gets its effect
     Effect red_effect = kNone;  // that effect, in play for this turn
@@ -283,7 +284,7 @@ void Latch(void* board)
     }
     g_online_pending = false;
     g_duel.bag_left = 0;
-    Log("chaos: the duel %s Chaos Mode, %s Red Peg Mode", g_duel.on ? "has" : "doesn't have",
+    Log("chaos: the duel %s Chaos Mode, %s Sabotage Mode", g_duel.on ? "has" : "doesn't have",
         g_duel.red_on ? "has" : "doesn't have");
 }
 
@@ -390,7 +391,7 @@ void __fastcall OnBoxChecked(CheckboxListener*, void*, int id, int checked)
         return;  // (the joiner's boxes don't take clicks)
     if (id == kRedBoxId) {
         config::SetRedPegMode(on);
-        Log("chaos: Red Peg Mode %s", on ? "chosen" : "off");
+        Log("chaos: Sabotage Mode %s", on ? "chosen" : "off");
     } else {
         config::SetChaosMode(on);
         Log("chaos: Chaos Mode %s", on ? "chosen" : "off");
@@ -428,7 +429,7 @@ void UpdateBoxes()
     if (!sel)
         return;
     if (!g_box) {
-        g_red_box = NewBox(sel, kRedBoxId, "Red Peg Mode", kRedBoxY, RedWanted());
+        g_red_box = NewBox(sel, kRedBoxId, "Sabotage Mode", kRedBoxY, RedWanted());
         g_box = NewBox(sel, kBoxId, "Chaos Mode", kBoxY, Wanted());
     }
     bool joining = Joining();
@@ -652,7 +653,7 @@ bool HandleMessage(const net::Message& m)
         memcpy(&o, m.data.data(), sizeof o);
         g_host_choice = o.chaos != 0;
         g_host_red = o.red != 0;
-        Log("chaos: the host's choices: Chaos Mode %s, Red Peg Mode %s", g_host_choice ? "on" : "off",
+        Log("chaos: the host's choices: Chaos Mode %s, Sabotage Mode %s", g_host_choice ? "on" : "off",
             g_host_red ? "on" : "off");
     }
     return true;
@@ -875,7 +876,7 @@ std::string DebugCommand(const std::string& args)
                 g_red_tick = static_cast<uint32_t>(strtoul(word.c_str(), nullptr, 10));
         }
         if (!g_duel.red_on)
-            return "error: no Red Peg Mode";
+            return "error: no Sabotage Mode";
         g_red_pending = true;
         return "ok";
     }

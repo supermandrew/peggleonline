@@ -1,8 +1,8 @@
 #pragma once
-// Chaos Mode and Red Peg Mode for duels, local and online.
+// Chaos Mode and Sabotage Mode for duels, local and online.
 // Chaos Mode: both players' first shots are normal, then every round (each player shooting once) brings a random
 // effect, named in the middle of the screen, and the next round's replaces it.
-// Red Peg Mode: one blue peg of the level is red. Whoever hits it gives the other player an effect for their next
+// Sabotage Mode: one blue peg of the level is red. Whoever hits it gives the other player an effect for their next
 // turn (one shot), named the same way; there is no red peg after that. With both on, the two effects stack (never
 // the same one twice).
 // Everything that changes the game happens inside the board's ticks, so two online games stay identical.
@@ -42,7 +42,7 @@ void Update();  // once per frame: the boxes on the Two Player Selection
 
 // The boxes: this player's choices (remembered), and online the host's, which the joiner's boxes show.
 bool Wanted();     // CHAOS MODE
-bool RedWanted();  // RED PEG MODE
+bool RedWanted();  // SABOTAGE MODE
 bool HandleMessage(const net::Message& m);  // returns true if it was the host's choice
 
 // Play Now, online: whether this duel has each mode and the seed of its random choices, the same on both
